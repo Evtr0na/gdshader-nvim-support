@@ -6,6 +6,8 @@ local context = require("gdshader_nvim.context")
 
 local util = require("gdshader_nvim.util")
 
+local hints = require("gdshader_nvim.syntax.hints")
+
 local configured = false
 
 ------------------------------------------------------------
@@ -283,7 +285,20 @@ function M.goto_definition()
     local include_path = get_include_at_cursor(bufnr, row, column)
 
     if include_path then
-        local target_path = resolve_include_path(bufnr, include_path)
+        --------------------------------------------------------
+        -- #gdshader-hint-ignore / #gdshader-hint-redirection
+        --------------------------------------------------------
+
+        local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+
+        local line_text = lines[row + 1] or ""
+        local next_text = lines[row + 2]
+
+        local include_hints = hints.include_hints(line_text, next_text)
+
+        local resolve_path = include_hints.redirect or include_path
+
+        local target_path = resolve_include_path(bufnr, resolve_path)
 
         if target_path and vim.uv.fs_stat(target_path) then
             jump_to({
@@ -294,6 +309,14 @@ function M.goto_definition()
                 column = 0,
             })
 
+            return
+        end
+
+        --------------------------------------------------------
+        -- 被 #gdshader-hint-ignore 标记：静默跳过。
+        --------------------------------------------------------
+
+        if include_hints.ignore then
             return
         end
 

@@ -296,6 +296,70 @@ end
 -- Build semantic document
 ------------------------------------------------------------
 
+------------------------------------------------------------
+-- Doc comment for a function
+--
+-- Collects the `///` / `/** */` DOC_COMMENT tokens immediately
+-- above a function declaration (mirrors vscode doc comments).
+------------------------------------------------------------
+
+local function clean_doc(text)
+    text = text:gsub("^///%s*", "")
+    text = text:gsub("^/%*%*%s*", "")
+    text = text:gsub("%s*%*%/%s*$", "")
+
+    return text
+end
+
+local function function_doc(tokens, node)
+    if not tokens or not node then
+        return nil
+    end
+
+    local start_line = node.start_line or 0
+    local start_column = node.start_column or 0
+
+    --------------------------------------------------------
+    -- Find the token index at the function's start position.
+    --------------------------------------------------------
+
+    local index = nil
+
+    for i, tok in ipairs(tokens) do
+        if tok.line == start_line and tok.column == start_column then
+            index = i
+
+            break
+        end
+    end
+
+    if not index or index <= 1 then
+        return nil
+    end
+
+    --------------------------------------------------------
+    -- Walk upward collecting contiguous DOC_COMMENT tokens.
+    --------------------------------------------------------
+
+    local lines = {}
+
+    for j = index - 1, 1, -1 do
+        local tok = tokens[j]
+
+        if tok.kind ~= "doc_comment" then
+            break
+        end
+
+        table.insert(lines, 1, clean_doc(tok.value))
+    end
+
+    if #lines == 0 then
+        return nil
+    end
+
+    return table.concat(lines, "\n")
+end
+
 local function build_document(bufnr)
     local lexed = syntax_source.get_lexed(bufnr)
 
@@ -379,6 +443,8 @@ local function build_document(bufnr)
 
             fn.scope = scope
 
+            fn.doc = function_doc(lexed.tokens, node)
+
             table.insert(result.functions, fn)
 
             table.insert(result.function_scopes, scope)
@@ -396,6 +462,99 @@ local function build_document(bufnr)
                 ast = node,
             })
         end
+    end
+
+    --------------------------------------------------------
+    -- Hint comments (#gdshader-hint-*)
+    -- (type / declare / define) — 对齐 vscode hint-scanner。
+    --------------------------------------------------------
+
+    local ok_hints, hints = pcall(require, "gdshader_nvim.syntax.hints")
+
+    if ok_hints and hints then
+        local src_lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+        local src = table.concat(src_lines, "\n")
+
+        local scanned = hints.scan(src)
+
+        ----------------------------------------------------
+        -- type hints: 覆盖紧邻上方的变量声明类型。
+        ----------------------------------------------------
+
+        for _, th in ipairs(scanned.typeHints or {}) do
+            for _, g in ipairs(result.globals) do
+                if g.end_line == th.line then
+                    g.type = th.typeName
+
+                    break
+                end
+            end
+        end
+
+        ----------------------------------------------------
+        -- declare hints: 注入变量 / 函数符号。
+        ----------------------------------------------------
+
+        for _, dh in ipairs(scanned.defHints or {}) do
+            if dh.isFunction then
+                local params = {}
+
+                for _, p in ipairs(dh.parameters or {}) do
+                    table.insert(params, {
+                        name = p.name,
+                        type = p.typeName,
+                        kind = "parameter",
+                        mode = (p.qualifier and p.qualifier ~= "" and p.qualifier or nil),
+                        name_line = dh.line + 1,
+                        name_column = 0,
+                        start_line = dh.line + 1,
+                        start_column = 0,
+                        end_line = dh.line + 1,
+                        end_column = 0,
+                    })
+                end
+
+                table.insert(result.functions, {
+                    name = dh.name,
+                    return_type = dh.typeName,
+                    parameters = params,
+                    name_line = dh.line + 1,
+                    name_column = 0,
+                    start_line = dh.line + 1,
+                    end_line = dh.line + 1,
+                    body_start_line = dh.line + 1,
+                    body_end_line = dh.line + 1,
+                    start_column = 0,
+                    end_column = 0,
+                    body_start_column = 0,
+                    body_end_column = 0,
+                    ast = nil,
+                    scope = nil,
+                    hint_declared = true,
+                    prototype = true,
+                    incomplete_body = true,
+                })
+            else
+                table.insert(result.globals, {
+                    name = dh.name,
+                    type = dh.typeName,
+                    kind = "global",
+                    modifier = nil,
+                    is_array = false,
+                    name_line = dh.line + 1,
+                    name_column = 0,
+                    line = dh.line + 1,
+                    start_line = dh.line + 1,
+                    start_column = 0,
+                    end_line = dh.line + 1,
+                    end_column = 0,
+                    ast = nil,
+                    hint_declared = true,
+                })
+            end
+        end
+
+        result.macros = scanned.macros
     end
 
     return result

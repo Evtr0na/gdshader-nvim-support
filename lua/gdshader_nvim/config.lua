@@ -27,6 +27,10 @@ local defaults = {
         definition = true,
         references = true,
         rename = true,
+        color = true,
+        format = true,
+        template = true,
+        semantic_tokens = true,
     },
 
     --------------------------------------------------------
@@ -72,6 +76,60 @@ local defaults = {
     --------------------------------------------------------
 
     treesitter = true,
+
+    --------------------------------------------------------
+    -- Color preview
+    --
+    -- `decorate` adds an extmark swatch next to every vec3/vec4
+    -- literal on change. Off by default to keep large buffers
+    -- responsive; use :GDShaderColorDecoration to toggle.
+    --------------------------------------------------------
+
+    color = {
+        decorate = false,
+        debounce_ms = 200,
+    },
+
+    --------------------------------------------------------
+    -- Semantic tokens (struct-name highlighting)
+    --
+    -- Mirrors the VSCode semantic-tokens provider: every use of a
+    -- user-defined `struct` name (declaration, type reference,
+    -- constructor call, return type) is highlighted. The highlight
+    -- group links to `Type`; override it with
+    -- `:highlight GdshaderStructType ...` if you want a custom look.
+    --------------------------------------------------------
+
+    semantic_tokens = {
+        hl_group = "GdshaderStructType",
+        debounce_ms = 200,
+    },
+
+    --------------------------------------------------------
+    -- Formatting
+    --
+    -- `on_save` formats the buffer on `:w`. Leave off if you prefer
+    -- conform.nvim's format_on_save (the plugin registers a
+    -- `gdshader` conform formatter automatically).
+    --------------------------------------------------------
+
+    format = {
+        on_save = false,
+    },
+
+    --------------------------------------------------------
+    -- References picker
+    --
+    -- `picker` selects how `:GDShaderReferences` / `gr` / `grr`
+    -- present results:
+    --   "auto"      -> telescope when available, else quickfix
+    --   "telescope" -> always telescope (falls back to quickfix)
+    --   "quickfix"  -> always the quickfix list
+    --------------------------------------------------------
+
+    references = {
+        picker = "auto",
+    },
 
     --------------------------------------------------------
     -- Extra GDShader knowledge merged into the database.

@@ -66,7 +66,25 @@ function M.check()
         else
             warn("`completion` feature is enabled but blink.cmp is not installed. "
                 .. "Install `Saghen/blink.cmp` and register the provider "
-                .. '{ name = "GDShader", module = "gdshader_nvim" }.')
+                .. '{ name = "GDShader", module = "gdshader_nvim" } '
+                .. '(the bundled alias module "gdshader_blink" also works).')
+        end
+    end
+
+    --------------------------------------------------------
+    -- conform.nvim (optional, for :GDShaderFormat / format-on-save)
+    --------------------------------------------------------
+
+    if config.features.format then
+        local has_conform = pcall(require, "conform")
+
+        if has_conform then
+            ok("conform.nvim is available; the `gdshader` formatter is registered "
+                .. "automatically. Add `gdshader = { \"gdshader\" }` to your "
+                .. "conform `formatters_by_ft` to enable format-on-save.")
+        else
+            info("conform.nvim not installed; formatting is still available via "
+                .. ":GDShaderFormat (and the native format.on_save option).")
         end
     end
 

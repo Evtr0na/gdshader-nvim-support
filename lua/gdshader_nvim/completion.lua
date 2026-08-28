@@ -211,34 +211,60 @@ local function make_type_items()
     return items
 end
 
-local function make_builtin_function_items()
+local function make_builtin_function_items(processor)
     local items = {}
 
     for _, fn in ipairs(builtin_functions) do
-        local documentation = "```gdshader\n" .. fn.signature .. "\n```"
+        ----------------------------------------------------
+        -- 上下文受限的内置函数
+        -- (如 dFdx 仅 fragment, emit_subparticle 仅粒子)
+        -- 不在当前 processor 时跳过。
+        ----------------------------------------------------
 
-        if fn.description then
-            documentation = documentation .. "\n\n" .. fn.description
+        local skip = false
+
+        if fn.context then
+            local allowed = false
+
+            for _, ctx in ipairs(fn.context) do
+                if ctx == processor then
+                    allowed = true
+
+                    break
+                end
+            end
+
+            if not allowed then
+                skip = true
+            end
         end
 
-        table.insert(items, {
-            label = fn.name,
+        if not skip then
+            local documentation = "```gdshader\n" .. fn.signature .. "\n```"
 
-            -- 它本质上是函数，
-            -- 即使 insertText 使用 snippet。
-            kind = kinds.Function,
+            if fn.description then
+                documentation = documentation .. "\n\n" .. fn.description
+            end
 
-            detail = fn.signature,
+            table.insert(items, {
+                label = fn.name,
 
-            documentation = {
-                kind = "markdown",
-                value = documentation,
-            },
+                -- 它本质上是函数，
+                -- 即使 insertText 使用 snippet。
+                kind = kinds.Function,
 
-            insertText = fn.snippet,
+                detail = fn.signature,
 
-            insertTextFormat = vim.lsp.protocol.InsertTextFormat.Snippet,
-        })
+                documentation = {
+                    kind = "markdown",
+                    value = documentation,
+                },
+
+                insertText = fn.snippet,
+
+                insertTextFormat = vim.lsp.protocol.InsertTextFormat.Snippet,
+            })
+        end
     end
 
     return items
@@ -381,9 +407,12 @@ local function make_context_items(ctx, cursor_line)
 
     --------------------------------------------------------
     -- Godot built-in functions
+    -- (按当前 processor 过滤上下文受限函数)
     --------------------------------------------------------
 
-    vim.list_extend(items, make_builtin_function_items())
+    local processor = context.get_processor(ctx.bufnr, cursor_line)
+
+    vim.list_extend(items, make_builtin_function_items(processor))
 
     --------------------------------------------------------
     -- Processor snippets

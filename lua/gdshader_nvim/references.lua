@@ -17,6 +17,122 @@ local function current_target(bufnr)
 end
 
 ------------------------------------------------------------
+-- Build reference rows (shared by all pickers)
+------------------------------------------------------------
+
+local function build_items(bufnr, target, references)
+    local filename = vim.api.nvim_buf_get_name(bufnr)
+
+    local items = {}
+
+    for _, reference in ipairs(references) do
+        local text = reference.text:gsub("^%s+", ""):gsub("%s+$", "")
+
+        table.insert(items, {
+            filename = filename,
+
+            lnum = reference.line + 1,
+
+            col = reference.column + 1,
+
+            text = (reference.declaration and "[declaration] " or "") .. text,
+        })
+    end
+
+    return items
+end
+
+------------------------------------------------------------
+-- Quickfix fallback
+------------------------------------------------------------
+
+local function show_quickfix(bufnr, target, references)
+    vim.fn.setqflist({}, " ", {
+        title = "GDShader references: " .. target.name,
+
+        items = build_items(bufnr, target, references),
+    })
+
+    pcall(function()
+        vim.cmd("copen")
+    end)
+end
+
+------------------------------------------------------------
+-- Telescope picker
+--
+-- Uses the user's own telescope (already configured in their
+-- setup) so `gr`/`grr` feel native. Returns false if telescope
+-- is unavailable so the caller can fall back to the quickfix list.
+------------------------------------------------------------
+
+local function show_telescope(bufnr, target, references)
+    local ok_telescope, telescope = pcall(require, "telescope")
+
+    if not ok_telescope or not telescope then
+        return false
+    end
+
+    local pickers = require("telescope.pickers")
+    local finders = require("telescope.finders")
+    local conf = require("telescope.config").values
+    local actions = require("telescope.actions")
+    local action_state = require("telescope.actions.state")
+
+    local items = build_items(bufnr, target, references)
+
+    local previewer = conf.qflist_previewer or conf.grep_previewer
+
+    pickers.new({}, {
+        prompt_title = "GDShader references: " .. target.name,
+
+        finder = finders.new_table({
+            results = items,
+
+            entry_maker = function(entry)
+                return {
+                    value = entry,
+
+                    display = entry.text,
+
+                    filename = entry.filename,
+
+                    lnum = entry.lnum,
+
+                    col = entry.col,
+                }
+            end,
+        }),
+
+        sorter = conf.generic_sorter({}),
+
+        previewer = previewer,
+
+        attach_mappings = function(prompt_bufnr, _)
+            actions.select_default:replace(function()
+                actions.close(prompt_bufnr)
+
+                local selection = action_state.get_selected_entry()
+
+                if selection then
+                    vim.cmd("edit " .. vim.fn.fnameescape(selection.filename))
+
+                    vim.api.nvim_win_set_cursor(0, {
+                        selection.lnum,
+
+                        math.max(0, selection.col - 1),
+                    })
+                end
+            end)
+
+            return true
+        end,
+    }):find()
+
+    return true
+end
+
+------------------------------------------------------------
 -- Show
 ------------------------------------------------------------
 
@@ -30,7 +146,7 @@ function M.show()
     local target = current_target(bufnr)
 
     if not target then
-        vim.notify("GDShader: no renameable symbol under cursor", vim.log.levels.INFO)
+        vim.notify("GDShader: no referenceable symbol under cursor", vim.log.levels.INFO)
 
         return
     end
@@ -43,31 +159,17 @@ function M.show()
         return
     end
 
-    local items = {}
+    local picker = require("gdshader_nvim.config").get().references.picker
 
-    for _, reference in ipairs(references) do
-        local text = reference.text:gsub("^%s+", ""):gsub("%s+$", "")
-
-        table.insert(items, {
-            bufnr = bufnr,
-
-            lnum = reference.line + 1,
-
-            col = reference.column + 1,
-
-            text = (reference.declaration and "[declaration] " or "") .. text,
-        })
+    if picker == "auto" then
+        picker = pcall(require, "telescope") and "telescope" or "quickfix"
     end
 
-    vim.fn.setqflist({}, " ", {
-        title = "GDShader references: " .. target.name,
+    if picker == "telescope" and show_telescope(bufnr, target, references) then
+        return
+    end
 
-        items = items,
-    })
-
-    pcall(function()
-        vim.cmd("copen")
-    end)
+    show_quickfix(bufnr, target, references)
 end
 
 ------------------------------------------------------------
@@ -103,10 +205,14 @@ function M.attach(bufnr)
     -- Neovim 0.11 LSP convention:
     -- grr = references
     --
-    -- 只在没有已有 mapping 时设置。
+    -- Also bind `gr`, which many configs map to telescope's
+    -- LSP references picker — it has no data for a language
+    -- without an LSP server, so we shadow it buffer-locally.
     --------------------------------------------------------
 
     util.maybe_set_keymap(bufnr, require("gdshader_nvim.config").get().keymaps.references, M.show, "GDShader references")
+
+    util.maybe_set_keymap(bufnr, "gr", M.show, "GDShader references")
 end
 
 ------------------------------------------------------------

@@ -42,6 +42,22 @@ local function boot()
     if cfg.features.rename then
         require("gdshader_nvim.rename").setup()
     end
+
+    if cfg.features.color then
+        require("gdshader_nvim.color").setup()
+    end
+
+    if cfg.features.format then
+        require("gdshader_nvim.format").setup()
+    end
+
+    if cfg.features.template then
+        require("gdshader_nvim.template").setup()
+    end
+
+    if cfg.features.semantic_tokens then
+        require("gdshader_nvim.semantic_tokens").setup()
+    end
 end
 
 ------------------------------------------------------------
@@ -69,6 +85,15 @@ end
 ---@param extra table  See |gdshader-nvim-support-extending|
 function M.extend(extra)
     require("gdshader_nvim.data.knowledge").extend(extra)
+end
+
+--- Current knowledge-database version.
+---
+--- Bumped on every `extend()` / `extra` merge so that consumers can
+--- detect when the language data changed (e.g. after adding new
+--- built-in functions or types).
+function M.version()
+    return require("gdshader_nvim.data.knowledge").version()
 end
 
 --- blink.cmp completion source factory.

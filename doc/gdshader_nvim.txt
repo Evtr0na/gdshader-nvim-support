@@ -4,14 +4,21 @@
 INTRODUCTION                                            *gdshader-nvim-support*
 
 gdshader-nvim-support provides GDShader (|.gdshader| / |.gdshaderinc|)
-language support for Neovim:
+language support for Neovim. It is the Neovim port of
+|gdshader-vscode-support| and covers the same feature set:
 
   - Completion (via blink.cmp)
   - Diagnostics
-  - Hover
+  - Hover (incl. `///` and `/** */` doc comments)
   - Go to definition
   - Find references
   - Rename
+  - Color preview (vec3/vec4 swatches + commands)
+  - Formatting (indentation; integrates with conform.nvim / format-on-save)
+  - Snippets (shader_spatial, uniform_range, func_fragment, ...)
+  - Template insertion command
+  - Semantic tokens (user-defined `struct` name highlighting)
+  - Hint comments (`#gdshader-hint-*`)
 
 It is built on a self-contained GDShader lexer/parser, with an optional
 tree-sitter backend that is used for comment handling.
@@ -23,6 +30,8 @@ REQUIREMENTS                                            *gdshader-nvim-support-r
   - blink.cmp (required only for the `completion` feature)
   - A `gdshader` tree-sitter grammar (optional, recommended; the built-in
     lexer is used for comment masking otherwise)
+  - Optional: conform.nvim (format-on-save), telescope.nvim (references
+    picker), inc-rename.nvim (rename UI), friendly-snippets (snippets)
 
 ==============================================================================
 SETUP                                                  *gdshader-nvim-support-setup*
@@ -60,6 +69,10 @@ Pass a table to `setup()`:
         definition  = true,
         references  = true,
         rename      = true,
+        color       = true,
+        format      = true,
+        template    = true,
+        semantic_tokens = true,
       },
       diagnostics = { debounce_ms = 150 },
       keymaps = {
@@ -69,6 +82,10 @@ Pass a table to `setup()`:
         rename     = "grn",
       },
       completion = { trigger_characters = { ".", ":", ",", " " } },
+      color = { decorate = false, debounce_ms = 200 },
+      semantic_tokens = { hl_group = "GdshaderStructType", debounce_ms = 200 },
+      format = { on_save = false },
+      references = { picker = "auto" },   -- auto | telescope | quickfix
       treesitter = true,
       extra = { },   -- see |gdshader-nvim-support-extending|
     })
@@ -79,10 +96,20 @@ Fields:
   - `diagnostics.debounce_ms` (number): debounce for the diagnostics
     refresh, in milliseconds.
   - `keymaps` (table): a key string to set a mapping, or `false` to disable
-    it. Mappings are only set when the user has not already bound the key
-    in the buffer.
+    it. Mappings are set buffer-locally; an existing *buffer-local* map
+    wins, otherwise the plugin's map shadows any global LSP map inside
+    gdshader buffers.
   - `completion.trigger_characters` (list): characters that trigger
     completion.
+  - `color.decorate` (boolean): draw a swatch next to every vec3/vec4
+    literal (off by default); toggle with `:GDShaderColorDecoration`.
+  - `semantic_tokens.hl_group` (string): highlight group for struct names
+    (links to `Type` by default; override with `:highlight`).
+  - `format.on_save` (boolean): format the buffer on `:w`. Leave off when
+    using conform's format_on_save.
+  - `references.picker` (string): how references are shown — `"auto"`
+    (telescope when available, else quickfix), `"telescope"`, or
+    `"quickfix"`.
   - `treesitter` (boolean): use the `gdshader` tree-sitter grammar for
     comment masking when one is available.
   - `extra` (table): extra GDShader knowledge merged into the database.
@@ -95,13 +122,19 @@ blink.cmp source factory. Register the provider:
     require("blink.cmp").setup({
       sources = {
         default = { "gdshader", "lsp", "path", "buffer" },
+        per_filetype = {
+          gdshader = { "gdshader", "path", "snippets", "buffer" },
+          gdshaderinc = { "gdshader", "path", "snippets", "buffer" },
+        },
         providers = {
           gdshader = { name = "GDShader", module = "gdshader_nvim" },
         },
       },
     })
 
-blink instantiates the source by calling `require("gdshader_nvim").new()`.
+blink instantiates the source by calling `require("<module>").new()`. The
+`module` may be `gdshader_nvim` (this example) or the bundled alias
+`gdshader_blink` — both are equivalent.
 
 ==============================================================================
 EXTENDING                                             *gdshader-nvim-support-extending*
@@ -157,8 +190,49 @@ the optional `gdshader` tree-sitter grammar are available.
 ==============================================================================
 COMMANDS                                              *gdshader-nvim-support-commands*
 
-Features are wired through FileType autocommands and the `keymaps`
-configured above. The plugin exposes no explicit user commands.
+Each gdshader buffer gets the following user commands (also reachable via
+the `keymaps` above):
+
+  :GDShaderHover                hover info (|K|)
+  :GDShaderDefinition           go to definition (|gd|)
+  :GDShaderReferences           find references (|gr| / |grr|)
+  :GDShaderRename [new]         rename symbol (|grn|)
+  :GDShaderFormat               format the buffer
+  :GDShaderInsertTemplate       insert a shader template
+  :GDShaderPreviewColor         preview the color under the cursor
+  :GDShaderColorDecoration      toggle inline color swatches
+
+==============================================================================
+ECOSYSTEM                                             *gdshader-nvim-support-ecosystem*
+
+conform.nvim~
+  The plugin registers a `gdshader` formatter automatically. Add it to your
+  conform `formatters_by_ft` to enable `format_on_save` / `:ConformFormat`:
+>
+    formatters_by_ft = {
+      gdshader = { "gdshader" },
+      gdshaderinc = { "gdshader" },
+    },
+<
+  Without conform, use `format.on_save = true` or `:GDShaderFormat`.
+
+telescope.nvim~
+  With `references.picker = "telescope"` (default `"auto"`), `gr` / `grr`
+  open a telescope picker built from the plugin's own reference search.
+  Because gdshader has no LSP server, the plugin shadows `gd` / `gr`
+  buffer-locally so they drive the plugin instead of an empty LSP picker.
+
+inc-rename.nvim~
+  Map `<leader>rn` (or any key) to `:GDShaderRename` inside gdshader
+  buffers to rename with the plugin's implementation.
+
+Snippets~
+  `snippets/gdshader.json` and `snippets/gdshaderinc.json` ship the same
+  snippets as the VSCode extension; load them with friendly-snippets or any
+  engine that reads `runtimepath/snippets/*.json`.
+
+==============================================================================
+
 
 ==============================================================================
 vim:tw=78:ft=help:norl:

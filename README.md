@@ -20,13 +20,21 @@ Neovim 版 GDShader 语言支持插件，提供补全、诊断、悬停、跳转
 
 ## Features · 功能
 
+与 VSCode 版（gdshader-vscode-support）功能对齐：
+
 - Completion (via [blink.cmp](https://github.com/Saghen/blink.cmp)) ·
-  基于 blink.cmp 的补全
-- Diagnostics · 诊断
-- Hover · 悬停提示
-- Go to definition · 跳转定义
+  基于 blink.cmp 的上下文感知补全（含 swizzle、uniform hint、处理器函数片段等）
+- Diagnostics · 语义级诊断
+- Hover · 悬停提示（含文档注释 `///`、`/** */`）
+- Go to definition · 跳转定义（变量 / 函数 / `#include`）
 - Find references · 查找引用
 - Rename · 重命名
+- Color preview · 颜色预览（`vec3`/`vec4` 色块与命令）
+- Formatting · 文档格式化（缩进规整，可接入 conform 或保存时自动格式化）
+- Snippets · 片段（`shader_spatial`、`uniform_range`、`func_fragment` 等）
+- Template · 着色器模板插入命令
+- Semantic tokens · 自定义 `struct` 类型名高亮
+- Hint comments · 支持 `#gdshader-hint-*` 提示注释与文档注释
 
 ## Requirements · 环境要求
 
@@ -53,6 +61,10 @@ Neovim 版 GDShader 语言支持插件，提供补全、诊断、悬停、跳转
 require("blink.cmp").setup({
   sources = {
     default = { "gdshader", "lsp", "path", "buffer" },
+    per_filetype = {
+      gdshader = { "gdshader", "path", "snippets", "buffer" },
+      gdshaderinc = { "gdshader", "path", "snippets", "buffer" },
+    },
     providers = {
       gdshader = { name = "GDShader", module = "gdshader_nvim" },
     },
@@ -60,7 +72,9 @@ require("blink.cmp").setup({
 })
 ```
 
-blink 会通过 `require("gdshader_nvim").new()` 实例化补全源。
+blink 会通过 `require("<module>").new()` 实例化补全源。`module` 可填
+`gdshader_nvim`（本仓库文档示例），也可以使用随附的别名模块 `gdshader_blink`
+（部分配置示例中使用）。两者等价。
 
 ## Configuration · 配置
 
@@ -74,6 +88,10 @@ require("gdshader_nvim").setup({
     definition  = true,
     references  = true,
     rename      = true,
+    color       = true,
+    format      = true,
+    template    = true,
+    semantic_tokens = true,   -- struct 类型名高亮
   },
   diagnostics = { debounce_ms = 150 },
   keymaps = {                                   -- 设为 false 可禁用对应映射
@@ -83,10 +101,53 @@ require("gdshader_nvim").setup({
     rename     = "grn",
   },
   completion = { trigger_characters = { ".", ":", ",", " " } },
+  color = { decorate = false, debounce_ms = 200 },        -- 行内颜色色块
+  semantic_tokens = { hl_group = "GdshaderStructType", debounce_ms = 200 },
+  format = { on_save = false },          -- 保存时自动格式化（与 conform 二选一）
+  references = { picker = "auto" },      -- auto | telescope | quickfix
   treesitter = true,
   extra = {},   -- 扩展知识库，见下方“Extending”
 })
 ```
+
+### 命令
+
+每个 gdshader 缓冲区会自动注册以下命令：
+
+- `:GDShaderHover` — 悬停信息（`K`）
+- `:GDShaderDefinition` — 跳转定义（`gd`）
+- `:GDShaderReferences` — 查找引用（`gr` / `grr`）
+- `:GDShaderRename [new]` — 重命名（`grn`）
+- `:GDShaderFormat` — 格式化
+- `:GDShaderInsertTemplate` — 插入着色器模板
+- `:GDShaderPreviewColor` — 预览光标处颜色
+- `:GDShaderColorDecoration` — 切换行内颜色色块
+
+## Ecosystem · 生态适配
+
+- **conform.nvim**：插件会自动注册名为 `gdshader` 的 formatter。
+  在你的 conform 配置里加入即可启用（含 `format_on_save`）：
+
+  ```lua
+  formatters_by_ft = {
+    gdshader = { "gdshader" },
+    gdshaderinc = { "gdshader" },
+  },
+  ```
+
+  若不使用 conform，可开启 `format.on_save = true`，或用 `:GDShaderFormat`。
+
+- **telescope.nvim**：`references.picker = "telescope"`（默认 `auto`）时，
+  `gr` / `grr` 会用你已配置的 telescope 展示引用列表。由于 gdshader 没有 LSP
+  server，插件会在 gdshader 缓冲区里把 `gd` / `gr` 等键位指向自身实现，
+  避免落到无数据的 LSP picker。
+
+- **inc-rename.nvim**：把 `<leader>rn` 在 gdshader 缓冲区指向 `:GDShaderRename`
+  即可（见下方示例）；或在 gdshader 中用 `grn`。
+
+- **Snippets**：仓库附带 `snippets/gdshader.json` 与 `snippets/gdshaderinc.json`，
+  配合 [friendly-snippets](https://github.com/rafamadriz/friendly-snippets)
+  或任意加载 `runtimepath/snippets/*.json` 的引擎即可获得片段补全。
 
 ## Extending · 扩展知识库
 

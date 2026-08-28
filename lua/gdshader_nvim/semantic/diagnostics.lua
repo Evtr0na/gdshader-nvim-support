@@ -14,6 +14,10 @@ local AstKind = ast.Kind
 
 local shader_types = require("gdshader_nvim.data.shader_types")
 
+local token = require("gdshader_nvim.syntax.token")
+
+local syntax_source = require("gdshader_nvim.syntax.source")
+
 ------------------------------------------------------------
 -- Lookup tables
 ------------------------------------------------------------
@@ -428,6 +432,167 @@ local function check_builtin_writes(result, semantic_document)
 end
 
 ------------------------------------------------------------
+-- Delimiter balance (braces / parentheses / brackets)
+--
+-- Mirrors vscode "Mismatched braces/parentheses detection".
+-- Comment / string tokens are skipped, so multi-line block
+-- comments never distort the count.
+------------------------------------------------------------
+
+local openers = { ["("] = ")", ["["] = "]", ["{"] = "}" }
+local closers = { [")"] = "(", ["]"] = "[", ["}"] = "{" }
+
+local function is_string_or_comment(tok)
+    return tok.kind == "string" or token.is_comment(tok)
+end
+
+local function check_delimiters(result, bufnr)
+    local ok, lexed = pcall(syntax_source.get_lexed, bufnr)
+
+    if not ok then
+        return
+    end
+
+    local tokens = lexed.tokens or {}
+
+    local stack = {}
+
+    for _, tok in ipairs(tokens) do
+        if not is_string_or_comment(tok) then
+            local v = tok.value
+
+            if openers[v] then
+                table.insert(stack, tok)
+            elseif closers[v] then
+                if #stack > 0 and stack[#stack].value == closers[v] then
+                    table.remove(stack)
+                else
+                    add(result, token_range(tok), "error", "unmatched-delimiter", "Unmatched '" .. v .. "'.")
+                end
+            end
+        end
+    end
+
+    for _, opener in ipairs(stack) do
+        add(result, token_range(opener), "error", "unmatched-delimiter", "Unmatched '" .. opener.value .. "'.")
+    end
+end
+
+------------------------------------------------------------
+-- Missing semicolon
+--
+-- Mirrors vscode "Missing semicolon warnings". Skips the
+-- closing ')' of if/for/while conditions to avoid flagging
+-- brace-less control-flow bodies.
+------------------------------------------------------------
+
+local control_keywords = { ["if"] = true, ["for"] = true, ["while"] = true }
+
+local function is_value_end(tok)
+    if not tok then
+        return false
+    end
+
+    if tok.kind == "identifier" or tok.kind == "number" or tok.kind == "int"
+        or tok.kind == "float" or tok.kind == "uint" or tok.kind == "string" then
+        return true
+    end
+
+    if tok.kind == "punctuation" and (tok.value == ")" or tok.value == "]" or tok.value == "}") then
+        return true
+    end
+
+    return false
+end
+
+local function is_continuation(tok)
+    if not tok then
+        return true
+    end
+
+    local v = tok.value
+
+    if v == ";" or v == "," or v == "{" or v == "}" or v == ")" or v == "]" or v == "." or v == ":" then
+        return true
+    end
+
+    if tok.kind == "operator" then
+        return true
+    end
+
+    return false
+end
+
+local function check_missing_semicolons(result, bufnr)
+    local ok, lexed = pcall(syntax_source.get_lexed, bufnr)
+
+    if not ok then
+        return
+    end
+
+    local tokens = lexed.tokens or {}
+
+    --------------------------------------------------------
+    -- Significant (non-comment) token indices.
+    --------------------------------------------------------
+
+    local sig = {}
+
+    for i, tok in ipairs(tokens) do
+        if not token.is_comment(tok) then
+            table.insert(sig, i)
+        end
+    end
+
+    --------------------------------------------------------
+    -- Mark the ')' that closes if/for/while conditions.
+    --------------------------------------------------------
+
+    local control_close = {}
+    local paren_depth = 0
+    local pending_control_depth = nil
+
+    for _, idx in ipairs(sig) do
+        local tok = tokens[idx]
+
+        if tok.kind == "keyword" and control_keywords[tok.value] then
+            pending_control_depth = paren_depth
+        elseif tok.value == "(" and tok.kind == "punctuation" then
+            paren_depth = paren_depth + 1
+        elseif tok.value == ")" and tok.kind == "punctuation" then
+            if pending_control_depth ~= nil and paren_depth == pending_control_depth + 1 then
+                control_close[idx] = true
+
+                pending_control_depth = nil
+            end
+
+            paren_depth = paren_depth - 1
+        end
+    end
+
+    --------------------------------------------------------
+    -- Detect value-ending tokens followed by a new statement.
+    --------------------------------------------------------
+
+    for k = 1, #sig do
+        local idx = sig[k]
+        local tok = tokens[idx]
+
+        if is_value_end(tok) and not control_close[idx] then
+            local next_idx = sig[k + 1]
+
+            if next_idx then
+                local next_tok = tokens[next_idx]
+
+                if next_tok.line > tok.line and not is_continuation(next_tok) then
+                    add(result, token_range(tok), "warning", "missing-semicolon", "Missing ';' at end of statement.")
+                end
+            end
+        end
+    end
+end
+
+------------------------------------------------------------
 -- Build
 ------------------------------------------------------------
 
@@ -445,6 +610,10 @@ local function build(bufnr)
     check_discard_usage(result, semantic_document)
 
     check_builtin_writes(result, semantic_document)
+
+    check_delimiters(result, bufnr)
+
+    check_missing_semicolons(result, bufnr)
 
     return result
 end

@@ -1,0 +1,84 @@
+{
+  "Uniform: 带范围的 float": {
+    "prefix": "uniform_range",
+    "body": [
+      "uniform float ${1:name} : hint_range(${2:0.0}, ${3:1.0}${4:, ${5:0.01}}) = ${6:0.5};"
+    ],
+    "description": "带 hint_range 的 uniform float"
+  },
+  "Uniform: 颜色": {
+    "prefix": "uniform_color",
+    "body": [
+      "uniform vec4 ${1:color} : source_color = vec4(${2:1.0, 1.0, 1.0, 1.0});"
+    ],
+    "description": "带 source_color 提示的 uniform vec4 颜色"
+  },
+  "Uniform: 纹理": {
+    "prefix": "uniform_texture",
+    "body": [
+      "uniform sampler2D ${1:texture_name} : ${2|source_color,hint_normal,hint_default_white,hint_default_black|};"
+    ],
+    "description": "uniform sampler2D 纹理"
+  },
+  "Uniform: 枚举": {
+    "prefix": "uniform_enum",
+    "body": [
+      "uniform int ${1:mode} : hint_enum(\"${2:选项A}\", \"${3:选项B}\") = ${4:0};"
+    ],
+    "description": "带 hint_enum 的 uniform int 枚举"
+  },
+  "函数: vertex": {
+    "prefix": "func_vertex",
+    "body": [
+      "void vertex() {",
+      "\t$0",
+      "}"
+    ],
+    "description": "vertex() 处理器函数"
+  },
+  "函数: fragment": {
+    "prefix": "func_fragment",
+    "body": [
+      "void fragment() {",
+      "\t$0",
+      "}"
+    ],
+    "description": "fragment() 处理器函数"
+  },
+  "函数: light": {
+    "prefix": "func_light",
+    "body": [
+      "void light() {",
+      "\t$0",
+      "}"
+    ],
+    "description": "light() 处理器函数"
+  },
+  "函数: start (粒子)": {
+    "prefix": "func_start",
+    "body": [
+      "void start() {",
+      "\t$0",
+      "}"
+    ],
+    "description": "start() 处理器函数 (粒子着色器)"
+  },
+  "函数: process (粒子)": {
+    "prefix": "func_process",
+    "body": [
+      "void process() {",
+      "\t$0",
+      "}"
+    ],
+    "description": "process() 处理器函数 (粒子着色器)"
+  },
+  "Uniform 分组": {
+    "prefix": "group_uniforms",
+    "body": [
+      "group_uniforms ${1:GroupName};",
+      "uniform ${2:float} ${3:name} = ${4:0.0};",
+      "group_uniforms;"
+    ],
+    "description": "uniform 分组块"
+  }
+}

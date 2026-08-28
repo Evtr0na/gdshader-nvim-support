@@ -28,8 +28,14 @@ end
 -- Buffer-local keymap
 --
 -- `key` may be:
---   * a string  -> set only if the user has not already mapped it
+--   * a string  -> set a buffer-local mapping (see below)
 --   * false/nil -> do nothing (feature mapping disabled)
+--
+-- We only skip when the user has already bound `key` *buffer-locally*
+-- in THIS buffer. Otherwise we set a buffer-local mapping. This is the
+-- desired behaviour for a language with no LSP server: the mapping
+-- shadows any global LSP keymap (e.g. telescope's `gd`/`gr`) inside
+-- gdshader buffers, while other filetypes keep their LSP behaviour.
 ------------------------------------------------------------
 
 function M.maybe_set_keymap(bufnr, key, fn, desc)
@@ -37,7 +43,11 @@ function M.maybe_set_keymap(bufnr, key, fn, desc)
         return
     end
 
-    local existing = vim.fn.maparg(key, "n", false, true)
+    local existing = nil
+
+    pcall(function()
+        existing = vim.fn.maparg(key, "n", false, true, bufnr)
+    end)
 
     if type(existing) == "table" and not vim.tbl_isempty(existing) then
         return

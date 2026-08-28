@@ -96,6 +96,18 @@ local function user_function_lines(functions)
 
         append(lines, code_block(context.get_function_signature(fn)))
 
+        --------------------------------------------------------
+        -- Doc comment (`///` / `/** */`)
+        --------------------------------------------------------
+
+        if fn.doc and fn.doc ~= "" then
+            blank(lines)
+
+            for _, doc_line in ipairs(vim.split(fn.doc, "\n", { plain = true })) do
+                table.insert(lines, doc_line)
+            end
+        end
+
         if fn.start_line then
             blank(lines)
 
