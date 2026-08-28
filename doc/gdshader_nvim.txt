@@ -1,0 +1,164 @@
+*gdshader-nvim-support.txt*   GDShader language support for Neovim
+
+==============================================================================
+INTRODUCTION                                            *gdshader-nvim-support*
+
+gdshader-nvim-support provides GDShader (|.gdshader| / |.gdshaderinc|)
+language support for Neovim:
+
+  - Completion (via blink.cmp)
+  - Diagnostics
+  - Hover
+  - Go to definition
+  - Find references
+  - Rename
+
+It is built on a self-contained GDShader lexer/parser, with an optional
+tree-sitter backend that is used for comment handling.
+
+==============================================================================
+REQUIREMENTS                                            *gdshader-nvim-support-requirements*
+
+  - Neovim >= 0.10
+  - blink.cmp (required only for the `completion` feature)
+  - A `gdshader` tree-sitter grammar (optional, recommended; the built-in
+    lexer is used for comment masking otherwise)
+
+==============================================================================
+SETUP                                                  *gdshader-nvim-support-setup*
+
+With lazy.nvim:
+
+    {
+      "XiaoDouXd/gdshader-nvim-support",
+      config = function()
+        require("gdshader_nvim").setup()
+      end,
+    }
+
+Register the completion provider in your blink.cmp configuration (see
+|gdshader-nvim-support-completion|).
+
+If you do not use lazy.nvim, call `require("gdshader_nvim").setup()` from
+your init.
+
+The plugin registers the `.gdshader` / `.gdshaderinc` file types through
+`plugin/gdshader_nvim.lua`, which runs at startup so detection works even
+before `setup()` is called.
+
+==============================================================================
+CONFIGURATION                                          *gdshader-nvim-support-config*
+
+Pass a table to `setup()`:
+
+    require("gdshader_nvim").setup({
+      filetypes = { "gdshader", "gdshaderinc" },
+      features = {
+        completion  = true,
+        diagnostics = true,
+        hover       = true,
+        definition  = true,
+        references  = true,
+        rename      = true,
+      },
+      diagnostics = { debounce_ms = 150 },
+      keymaps = {
+        hover      = "K",
+        definition = "gd",
+        references = "grr",
+        rename     = "grn",
+      },
+      completion = { trigger_characters = { ".", ":", ",", " " } },
+      treesitter = true,
+      extra = { },   -- see |gdshader-nvim-support-extending|
+    })
+
+Fields:
+  - `filetypes` (list): file types the plugin handles.
+  - `features` (table): toggle individual features on or off.
+  - `diagnostics.debounce_ms` (number): debounce for the diagnostics
+    refresh, in milliseconds.
+  - `keymaps` (table): a key string to set a mapping, or `false` to disable
+    it. Mappings are only set when the user has not already bound the key
+    in the buffer.
+  - `completion.trigger_characters` (list): characters that trigger
+    completion.
+  - `treesitter` (boolean): use the `gdshader` tree-sitter grammar for
+    comment masking when one is available.
+  - `extra` (table): extra GDShader knowledge merged into the database.
+
+==============================================================================
+COMPLETION                                            *gdshader-nvim-support-completion*
+
+blink.cmp source factory. Register the provider:
+
+    require("blink.cmp").setup({
+      sources = {
+        default = { "gdshader", "lsp", "path", "buffer" },
+        providers = {
+          gdshader = { name = "GDShader", module = "gdshader_nvim" },
+        },
+      },
+    })
+
+blink instantiates the source by calling `require("gdshader_nvim").new()`.
+
+==============================================================================
+EXTENDING                                             *gdshader-nvim-support-extending*
+
+Merge custom GDShader knowledge at runtime via `extend()`:
+
+    require("gdshader_nvim").extend({
+      types = { "my_type" },
+      shader_types = { "my_shader" },
+      builtin_functions = {
+        {
+          name = "foo",
+          signature = "foo(x)",
+          snippet = "foo(${1:x})",
+          description = "My custom function.",
+          return_type = { kind = "same_as_argument", index = 1 },
+        },
+      },
+      uniform_hints = {
+        { name = "my_hint", types = { vec3 = true }, description = "..." },
+      },
+      builtin_variables = {
+        spatial = {
+          fragment = {
+            { name = "MY_VAR", type = "vec3", mode = "out", detail = "..." },
+          },
+        },
+      },
+      processors = {
+        spatial = {
+          { name = "my_processor", detail = "...", allow_discard = false },
+        },
+      },
+      render_modes = {
+        spatial = { "my_render_mode" },
+      },
+    })
+
+You can also pass the same table through the `extra` setup option.
+
+The knowledge database is versioned; every `extend()` bumps the version so
+that cached lookups are rebuilt automatically.
+
+`same_as_argument` / `fixed` / `sampled_vector` are the supported
+`return_type` kinds used by `builtin_functions` entries.
+
+==============================================================================
+HEALTH                                               *gdshader-nvim-support-health*
+
+Run `:checkhealth gdshader_nvim` to verify that the plugin, blink.cmp and
+the optional `gdshader` tree-sitter grammar are available.
+
+==============================================================================
+COMMANDS                                              *gdshader-nvim-support-commands*
+
+Features are wired through FileType autocommands and the `keymaps`
+configured above. The plugin exposes no explicit user commands.
+
+==============================================================================
+vim:tw=78:ft=help:norl:

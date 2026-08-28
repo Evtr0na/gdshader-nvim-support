@@ -1,0 +1,5 @@
+*.log
+selftest.lua
+debug*.lua
+comptest.lua
+.DS_Store
