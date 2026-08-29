@@ -215,6 +215,26 @@ local base = {
         name = "repeat_disable",
         types = { sampler2D = true },
     },
+
+    --------------------------------------------------------
+    -- Roughness (generic)
+    --------------------------------------------------------
+
+    {
+        name = "hint_roughness",
+        types = { sampler2D = true },
+        description = "Use the texture as a generic roughness map.",
+    },
+
+    --------------------------------------------------------
+    -- Instance index (applicable to any type)
+    --------------------------------------------------------
+
+    {
+        name = "instance_index",
+        types = { ["*"] = true },
+        description = "Index of the current instance (for instance uniforms).",
+    },
 }
 
 return knowledge.register("uniform_hints", base)

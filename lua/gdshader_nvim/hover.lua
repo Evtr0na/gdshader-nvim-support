@@ -104,7 +104,12 @@ local function user_function_lines(functions)
             blank(lines)
 
             for _, doc_line in ipairs(vim.split(fn.doc, "\n", { plain = true })) do
-                table.insert(lines, doc_line)
+                --------------------------------------------------------
+                -- 加粗 @param / @return / @brief 等标签，
+                -- 与 VSCode 的文档注释渲染对齐。
+                --------------------------------------------------------
+
+                table.insert(lines, doc_line:gsub("@(%w+)", "**@%1**"))
             end
         end
 

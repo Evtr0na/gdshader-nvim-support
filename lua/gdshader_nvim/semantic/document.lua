@@ -304,11 +304,29 @@ end
 ------------------------------------------------------------
 
 local function clean_doc(text)
-    text = text:gsub("^///%s*", "")
-    text = text:gsub("^/%*%*%s*", "")
-    text = text:gsub("%s*%*%/%s*$", "")
+    if not text then
+        return ""
+    end
 
-    return text
+    local lines = vim.split(text, "\n", { plain = true })
+
+    for i, line in ipairs(lines) do
+        --------------------------------------------------------
+        -- 去掉行首的文档注释标记：
+        --   /// comment          -> comment
+        --   /** comment */       -> comment
+        --   * middle line        -> middle line   (块注释正文)
+        --------------------------------------------------------
+
+        line = line:gsub("^///%s*", "")
+        line = line:gsub("^/%*%*%s*", "")
+        line = line:gsub("%s*%*%/%s*$", "")
+        line = line:gsub("^%s*%*%s?", "")
+
+        lines[i] = line
+    end
+
+    return table.concat(lines, "\n")
 end
 
 local function function_doc(tokens, node)
@@ -377,6 +395,8 @@ local function build_document(bufnr)
         functions = {},
 
         globals = {},
+
+        structs = {},
 
         preprocessors = {},
 
@@ -461,6 +481,55 @@ local function build_document(bufnr)
 
                 ast = node,
             })
+
+        ----------------------------------------------------
+        -- Struct (user-defined type)
+        ----------------------------------------------------
+
+        elseif node.kind == AstKind.STRUCT then
+            local struct = {
+                name = node.name,
+
+                members = {},
+
+                name_line = to_context_line(node.start_line),
+
+                name_column = node.start_column,
+
+                start_line = to_context_line(node.start_line),
+
+                start_column = node.start_column,
+
+                end_line = to_context_line(node.end_line),
+
+                end_column = node.end_column,
+            }
+
+            for _, member in ipairs(node.members or {}) do
+                table.insert(struct.members, {
+                    name = member.name,
+
+                    type = member.type,
+
+                    is_array = member.is_array == true,
+
+                    name_line = to_context_line(member.start_line),
+
+                    name_column = member.start_column,
+
+                    line = to_context_line(member.start_line),
+
+                    start_line = to_context_line(member.start_line),
+
+                    start_column = member.start_column,
+
+                    end_line = to_context_line(member.end_line),
+
+                    end_column = member.end_column,
+                })
+            end
+
+            table.insert(result.structs, struct)
         end
     end
 
@@ -723,6 +792,28 @@ end
 
 function M.get_preprocessors(bufnr)
     return M.get(bufnr).preprocessors
+end
+
+------------------------------------------------------------
+-- Structs (user-defined types)
+------------------------------------------------------------
+
+function M.get_structs(bufnr)
+    return M.get(bufnr).structs or {}
+end
+
+function M.get_struct(bufnr, name)
+    if not name then
+        return nil
+    end
+
+    for _, struct in ipairs(M.get_structs(bufnr) or {}) do
+        if struct.name == name then
+            return struct
+        end
+    end
+
+    return nil
 end
 
 function M.get_diagnostics(bufnr)

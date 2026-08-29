@@ -30,6 +30,7 @@ Neovim 版 GDShader 语言支持插件，提供补全、诊断、悬停、跳转
 - Find references · 查找引用
 - Rename · 重命名
 - Color preview · 颜色预览（`vec3`/`vec4` 色块与命令）
+  - 编辑：`:GDShaderEditColor` 在浮动窗口修改 RGB(A) 或 HEX 并写回（对应 VSCode 的点击编辑颜色）
 - Formatting · 文档格式化（缩进规整，可接入 conform 或保存时自动格式化）
 - Snippets · 片段（`shader_spatial`、`uniform_range`、`func_fragment` 等）
 - Template · 着色器模板插入命令
@@ -48,12 +49,40 @@ Neovim 版 GDShader 语言支持插件，提供补全、诊断、悬停、跳转
 
 ```lua
 {
-  "XiaoDouXd/gdshader-nvim-support",
+  "Evtr0na/gdshader-nvim-support",
   config = function()
     require("gdshader_nvim").setup()
   end,
 }
 ```
+
+### 可选：ccc.nvim 颜色编辑器
+
+:GDShaderEditColor 默认使用内置浮窗编辑器。若想用功能更丰富的
+[ccc.nvim](https://github.com/uga-rosa/ccc.nvim) 取色器（支持 RGB / HSL / Alpha
+滑块调节）来编辑 GDShader 颜色，把 ccc.nvim 作为可选依赖自行安装即可：
+
+```lua
+{
+  "Evtr0na/gdshader-nvim-support",
+  config = function()
+    require("gdshader_nvim").setup()
+  end,
+},
+-- 可选：ccc.nvim 不是本插件的必需依赖
+{
+  "uga-rosa/ccc.nvim",
+  config = function()
+    require("ccc").setup({})
+  end,
+}
+```
+
+安装并 setup 后，:GDShaderEditColor 会自动改用 ccc.nvim 的取色 UI；
+未安装时回退到内置编辑器。gdshader-nvim-support 只负责解析
+vec3(...) / vec4(...) 与写回，ccc.nvim 仅作颜色编辑 UI，不会解析
+GDShader 语法，也不替换现有行内颜色装饰（:GDShaderColorDecoration）。
+
 
 ### blink.cmp 补全源
 
@@ -101,7 +130,7 @@ require("gdshader_nvim").setup({
     rename     = "grn",
   },
   completion = { trigger_characters = { ".", ":", ",", " " } },
-  color = { decorate = false, debounce_ms = 200 },        -- 行内颜色色块
+  color = { decorate = false, debounce_ms = 200, editor = "auto" },  -- 行内色块；editor: auto|builtin|ccc
   semantic_tokens = { hl_group = "GdshaderStructType", debounce_ms = 200 },
   format = { on_save = false },          -- 保存时自动格式化（与 conform 二选一）
   references = { picker = "auto" },      -- auto | telescope | quickfix
@@ -122,6 +151,26 @@ require("gdshader_nvim").setup({
 - `:GDShaderInsertTemplate` — 插入着色器模板
 - `:GDShaderPreviewColor` — 预览光标处颜色
 - `:GDShaderColorDecoration` — 切换行内颜色色块
+- `:GDShaderEditColor` — 编辑光标处颜色（浮动窗口输入 R/G/B/A 或 HEX，回车写回缓冲区）
+- `:GDShaderEditColor` — 编辑光标处颜色（浮动窗口输入 R/G/B/A，回车写回缓冲区）
+
+### 颜色编辑器后端（Color editor backend）
+
+:GDShaderEditColor 支持两种后端，通过 color.editor 选择：
+
+- "auto"（默认）：检测到 ccc.nvim 就使用它，否则用内置浮窗。
+- "builtin"：永远使用内置浮窗。
+- "ccc"：优先使用 ccc.nvim；若未安装会提示并安全回退到内置浮窗。
+
+无论哪种后端，最终都写回合法的 GDShader：vec3(r, g, b) / vec4(r, g, b, a)
+（数值范围 0.0~1.0；vec3 不会因编辑变成 vec4，vec4 保留 Alpha）。
+取消操作不会修改源代码。
+
+```lua
+require("gdshader_nvim").setup({
+  color = { editor = "auto" },
+})
+```
 
 ## Ecosystem · 生态适配
 

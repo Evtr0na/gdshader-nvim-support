@@ -90,17 +90,26 @@ function M.reformat(lines, shiftwidth)
     local pad = string.rep(" ", shiftwidth)
 
     for _, raw in ipairs(lines) do
-        local trimmed = raw:gsub("%s+$", "")
+        --------------------------------------------------------
+        -- 同时去掉行首与行尾空白，避免重新缩进时叠加在已有缩进之上
+        -- （修复重复格式化导致缩进逐层加深的问题）。
+        --------------------------------------------------------
+
+        local trimmed = raw:match("^%s*(.-)%s*$")
 
         local is_preprocessor = trimmed:match("^%s*#%w") ~= nil
 
-        if not is_preprocessor and not block then
-            --------------------------------------------------------
-            -- 以 '}' 开头的行先减一级缩进。
-            --------------------------------------------------------
+        --------------------------------------------------------
+        -- 本行显示用的缩进。以 '}' 开头的行在显示时先回退一级，
+        -- 但后面的 brace 扫描仍会把它计入，因此 `} else {` 的后继
+        -- 语句体仍保持当前层级（与 VSCode 行为一致）。
+        --------------------------------------------------------
 
+        local display_indent = indent
+
+        if not is_preprocessor and not block then
             if trimmed:match("^}") then
-                indent = math.max(0, indent - 1)
+                display_indent = math.max(0, indent - 1)
             end
         end
 
@@ -109,7 +118,7 @@ function M.reformat(lines, shiftwidth)
         if is_preprocessor then
             out = trimmed
         else
-            out = (indent > 0 and pad:rep(indent) or "") .. trimmed
+            out = (display_indent > 0 and pad:rep(display_indent) or "") .. trimmed
         end
 
         table.insert(result, out)

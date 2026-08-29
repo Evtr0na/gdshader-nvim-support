@@ -212,7 +212,14 @@ function M.attach(bufnr)
 
     util.maybe_set_keymap(bufnr, require("gdshader_nvim.config").get().keymaps.references, M.show, "GDShader references")
 
-    util.maybe_set_keymap(bufnr, "gr", M.show, "GDShader references")
+    --------------------------------------------------------
+    -- 仅当 references 功能开启时才覆盖全局 `gr`
+    -- （与 keymaps.references 开关保持一致）。
+    --------------------------------------------------------
+
+    if require("gdshader_nvim.config").get().features.references then
+        util.maybe_set_keymap(bufnr, "gr", M.show, "GDShader references")
+    end
 end
 
 ------------------------------------------------------------

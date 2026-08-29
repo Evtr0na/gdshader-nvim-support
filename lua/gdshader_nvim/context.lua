@@ -114,13 +114,13 @@ function M.get_builtin_variables(bufnr, cursor_line)
 
     --------------------------------------------------------
     -- Shader type
+    --
+    -- VS Code defaults to `spatial` when no `shader_type` is
+    -- declared yet, so built-in variables (VERTEX, ALBEDO, …)
+    -- still surface during editing.
     --------------------------------------------------------
 
-    local shader_type = M.get_shader_type(bufnr)
-
-    if not shader_type then
-        return result
-    end
+    local shader_type = M.get_shader_type(bufnr) or "spatial"
 
     local shader_data = builtin_variables[shader_type]
 

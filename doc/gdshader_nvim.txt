@@ -13,7 +13,7 @@ language support for Neovim. It is the Neovim port of
   - Go to definition
   - Find references
   - Rename
-  - Color preview (vec3/vec4 swatches + commands)
+  - Color preview (vec3/vec4 swatches + preview/edit commands)
   - Formatting (indentation; integrates with conform.nvim / format-on-save)
   - Snippets (shader_spatial, uniform_range, func_fragment, ...)
   - Template insertion command
@@ -39,7 +39,7 @@ SETUP                                                  *gdshader-nvim-support-se
 With lazy.nvim:
 
     {
-      "XiaoDouXd/gdshader-nvim-support",
+      "Evtr0na/gdshader-nvim-support",
       config = function()
         require("gdshader_nvim").setup()
       end,
@@ -201,7 +201,43 @@ the `keymaps` above):
   :GDShaderInsertTemplate       insert a shader template
   :GDShaderPreviewColor         preview the color under the cursor
   :GDShaderColorDecoration      toggle inline color swatches
+  :GDShaderEditColor           edit the vec3/vec4 color under the cursor
 
+==============================================================================
+COLOR                                                  *gdshader-nvim-support-color*
+
+Inline swatches are drawn next to every vec3(...) / vec4(...) literal whose
+components are all within [0, 1] (mirroring VS Code, which only treats such
+literals as colors). Toggle them with :GDShaderColorDecoration.
+
+:GDShaderPreviewColor~
+  Shows the RGBA / HEX / ARGB representation of the color under the cursor in a
+  floating window (auto-closes after a few seconds).
+
+:GDShaderEditColor~
+  Opens a small floating editor pre-filled with the R/G/B(/A) components of the
+  color under the cursor. Edit the values (clamped to [0, 1]) and press <CR> to
+  write the updated vecN(r, g, b[, a]) back into the buffer; press q to cancel.
+  You can edit the R/G/B(/A) lines or the HEX line (e.g. #rrggbb / #rrggbbaa);
+  the HEX line takes precedence when valid.
+  The swatch at the top updates live as you type. This is the Neovim equivalent
+  of VS Code's click-to-edit color picker.
+
+  Map it to a key via gdshader-nvim-support-config:
+    require("gdshader_nvim").setup({
+      keymaps = { edit = "<leader>ce" },
+    })
+
+  Editor backend~
+  The editor is chosen by |gdshader-nvim-support-config| > color.editor:
+    - "auto"   (default) use ccc.nvim when installed, else builtin
+    - "builtin"        always the built-in floating editor
+    - "ccc"            always ccc.nvim; falls back to builtin if absent
+  gdshader-nvim-support parses vec3(...) / vec4(...) and writes the result
+  back itself; ccc.nvim is only the color-editing UI (RGB / HSL / Alpha). It
+  does not parse GDShader syntax and does not replace the inline swatches
+  from :GDShaderColorDecoration. Cancelling never modifies the source.
+==============================================================================
 ==============================================================================
 ECOSYSTEM                                             *gdshader-nvim-support-ecosystem*
 

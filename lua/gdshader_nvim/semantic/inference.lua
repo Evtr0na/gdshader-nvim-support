@@ -568,7 +568,7 @@ infer_expression_type = function(bufnr, expression, cursor_line, depth)
             local base_type = infer_expression_type(bufnr, base, cursor_line, depth + 1)
 
             if base_type then
-                return semantic_types.get_swizzle_result(base_type, member)
+                return semantic_types.get_member_result(bufnr, base_type, member)
             end
         end
     end

@@ -2,6 +2,8 @@ local M = {}
 
 local knowledge = require("gdshader_nvim.data.knowledge")
 
+local document = require("gdshader_nvim.semantic.document")
+
 ------------------------------------------------------------
 -- Type lookup
 --
@@ -148,6 +150,76 @@ function M.is_type(type_name)
     ensure_types()
 
     return type_set[type_name] == true
+end
+
+------------------------------------------------------------
+-- Struct (user-defined type) support
+--
+-- Member resolution is buffer-scoped because struct definitions
+-- live in the current file.
+------------------------------------------------------------
+
+function M.is_struct(bufnr, type_name)
+    if not type_name then
+        return false
+    end
+
+    return document.get_struct(bufnr, type_name) ~= nil
+end
+
+function M.get_struct_members(bufnr, type_name)
+    local struct = document.get_struct(bufnr, type_name)
+
+    if not struct then
+        return nil
+    end
+
+    return struct.members
+end
+
+function M.get_struct_member_type(bufnr, type_name, member)
+    local members = M.get_struct_members(bufnr, type_name)
+
+    if not members then
+        return nil
+    end
+
+    for _, m in ipairs(members) do
+        if m.name == member then
+            return m.type
+        end
+    end
+
+    return nil
+end
+
+------------------------------------------------------------
+-- Member access result
+--
+-- Handles both vector/matrix swizzles and struct members.
+-- `bufnr` is required for struct member lookup.
+------------------------------------------------------------
+
+function M.get_member_result(bufnr, base_type, member)
+    --------------------------------------------------------
+    -- Vector / matrix swizzle (no buffer needed).
+    --------------------------------------------------------
+
+    local swizzle = M.get_swizzle_result(base_type, member)
+
+    if swizzle then
+        return swizzle
+    end
+
+    --------------------------------------------------------
+    -- Struct member.
+    --------------------------------------------------------
+
+    if M.is_struct(bufnr, base_type) then
+        return M.get_struct_member_type(bufnr, base_type, member)
+    end
+
+    return nil
 end
 
 function M.get_vector_info(type_name)

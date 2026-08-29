@@ -1,0 +1,32 @@
+﻿nvim.exe : PARSER SOURCE: @D:/2zhuomian/app/source/gdsh
+ader-nvim-support/lua/gdshader_nvim/syntax/parser.lua
+At line:2 char:1
++ & nvim.exe --headless -c "luafile scratch_test.lua" -
+c "qa!" 2>&1 | O ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (PARSER SO 
+   URCE: ...ntax/parser.lua:String) [], RemoteExcepti  
+  on
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+Error in command line:
+E5113: Lua chunk: ...dshader-nvim-support/lua/gdshader_
+nvim/syntax/parser.lua:49: attempt to call global 'coll
+ect_user_types' (a nil value)
+stack traceback:
+	...dshader-nvim-support/lua/gdshader_nvim/syntax/parse
+r.lua:49: in function 'new'
+	...dshader-nvim-support/lua/gdshader_nvim/syntax/parse
+r.lua:1793: in function 'parse'
+	scratch_test.lua:16: in main chunk
+Error in command line..VimLeavePre Autocommands for "*"
+:
+Failed to open LSP client log file: C:/Users/SDD/AppDat
+a/Local/nvim-data/lsp.log: Permission denied
+Error in command line:
+E886: System error while opening temporary ShaDa file C
+:\Users\SDD\AppData\Local\nvim-data\shada\main.shada.tm
+p.a for writing: operation not permitted
+log: "C:\\Users\\SDD\\AppData\\Local\\nvim-data\\nvim.l
+og" not accessible, logging to: "nvim.log"

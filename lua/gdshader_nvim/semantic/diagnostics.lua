@@ -593,8 +593,276 @@ local function check_missing_semicolons(result, bufnr)
 end
 
 ------------------------------------------------------------
+-- #include resolution diagnostics
+--
+-- Mirrors vscode diagnosticsProvider #include handling:
+--   - redirection target missing  -> error
+--   - res:// with no redirection  -> hint (unresolved)
+--   - plain include missing file  -> error
+------------------------------------------------------------
+
+local function check_includes(result, bufnr)
+    local filename = vim.api.nvim_buf_get_name(bufnr)
+
+    if filename == "" then
+        return
+    end
+
+    local source_lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+
+    local ok, hints = pcall(require, "gdshader_nvim.syntax.hints")
+
+    if not ok or not hints then
+        return
+    end
+
+    local src = table.concat(source_lines, "\n")
+
+    local scanned = hints.scan(src)
+
+    local dir = vim.fs.dirname(filename)
+
+    for _, inc in ipairs(scanned.includes or {}) do
+        local line = inc.line or 0
+
+        local line_len = math.max(1, #(source_lines[line + 1] or ""))
+
+        if inc.redirectPath then
+            local target = vim.fs.normalize(vim.fs.joinpath(dir, inc.redirectPath))
+
+            if not vim.uv.fs_stat(target) then
+                add(result, {
+                    line = line, column = 0,
+                    end_line = line, end_column = line_len,
+                }, "error", "include-redirect-not-found",
+                "Redirection target not found: " .. inc.redirectPath)
+            end
+        elseif inc.isResPath and not inc.isIgnored then
+            add(result, {
+                line = line, column = 0,
+                end_line = line, end_column = line_len,
+            }, "hint", "include-res-unresolved",
+            "Unresolved res:// include '" .. inc.path .. "' (use #gdshader-hint-redirection to resolve).")
+        elseif not inc.isIgnored then
+            local target = vim.fs.normalize(vim.fs.joinpath(dir, inc.path))
+
+            if not vim.uv.fs_stat(target) then
+                add(result, {
+                    line = line, column = 0,
+                    end_line = line, end_column = line_len,
+                }, "error", "include-not-found",
+                "Include not found: " .. inc.path)
+            end
+        end
+    end
+end
+
+------------------------------------------------------------
+-- Duplicate declaration diagnostics
+--
+-- Mirrors vscode analyzer duplicate checks:
+--   - function name duplicates
+--   - global declaration (uniform/varying/variable/global) name duplicates
+--   - parameter / local variable duplicates within the same scope
+------------------------------------------------------------
+
+local function add_at(result, line, column, name, severity, code, message)
+    add(
+        result,
+        {
+            line = math.max(0, (line or 1) - 1),
+            column = column or 0,
+            end_line = math.max(0, (line or 1) - 1),
+            end_column = (column or 0) + #(name or ""),
+        },
+        severity,
+        code,
+        message
+    )
+end
+
+local function check_duplicate_in_scope(result, scope)
+    if not scope then
+        return
+    end
+
+    local seen = {}
+
+    for _, symbol in ipairs(scope.symbols or {}) do
+        local name = symbol.name
+
+        if name and not seen[name] then
+            seen[name] = true
+        else
+            add_at(result, symbol.name_line or symbol.start_line or symbol.line,
+                symbol.name_column or symbol.start_column or 0, name,
+                "error", "duplicate-declaration",
+                "Duplicate declaration of '" .. tostring(name) .. "'.")
+        end
+    end
+
+    for _, child in ipairs(scope.children or {}) do
+        check_duplicate_in_scope(result, child)
+    end
+end
+
+local function check_duplicate_declarations(result, semantic_document)
+    -- 1. Functions (skip hint-declared prototypes so they don't clash
+    --    with a real definition, matching vscode's HintDefined handling).
+    local fn_seen = {}
+
+    for _, fn in ipairs(semantic_document.functions or {}) do
+        if not fn.hint_declared then
+            local name = fn.name
+
+            if name and not fn_seen[name] then
+                fn_seen[name] = true
+            else
+                add_at(result, fn.name_line, fn.name_column, name,
+                    "error", "duplicate-function",
+                    "Duplicate function '" .. tostring(name) .. "'.")
+            end
+        end
+    end
+
+    -- 2. Globals (uniform / varying / variable / global / hint-injected global)
+    local g_seen = {}
+
+    for _, g in ipairs(semantic_document.globals or {}) do
+        if not g.hint_declared then
+            local name = g.name
+
+            if name and not g_seen[name] then
+                g_seen[name] = true
+            else
+                add_at(result, g.name_line or g.line, g.name_column or g.start_column, name,
+                    "error", "duplicate-declaration",
+                    "Duplicate declaration of '" .. tostring(name) .. "'.")
+            end
+        end
+    end
+
+    -- 3. Parameters / locals (within each function's scope tree)
+    for _, fn in ipairs(semantic_document.functions or {}) do
+        check_duplicate_in_scope(result, fn.scope)
+    end
+end
+
+------------------------------------------------------------
+-- Processor return diagnostics
+--
+-- Mirrors vscode analyzer.checkReturnInBlock: void processor
+-- functions (vertex / start / process / ...) must not contain a
+-- `return` statement. `allow_return` defaults to false; a
+-- processor can opt in by setting it to true in the data table.
+------------------------------------------------------------
+
+local function check_processor_returns(result, bufnr, semantic_document)
+    local shader_type = semantic_document.shader_type
+
+    if not shader_type then
+        return
+    end
+
+    local valid = {}
+
+    for _, p in ipairs(processors[shader_type] or {}) do
+        valid[p.name] = p
+    end
+
+    local ok, lexed = pcall(syntax_source.get_lexed, bufnr)
+
+    local tokens = (ok and lexed) and (lexed.tokens or {}) or {}
+
+    for _, fn in ipairs(semantic_document.functions or {}) do
+        local def = valid[fn.name]
+
+        if def and def.allow_return ~= true then
+            local lo = (fn.start_line or 1) - 1
+            local hi = (fn.end_line or 1) - 1
+
+            for _, tok in ipairs(tokens) do
+                if tok.kind == "keyword" and tok.value == "return"
+                    and tok.line >= lo and tok.line <= hi then
+                    add(result, token_range(tok), "error", "return-in-processor",
+                        "return is not allowed in processor function '" .. fn.name .. "'.")
+                end
+            end
+        end
+    end
+end
+
+------------------------------------------------------------
 -- Build
 ------------------------------------------------------------
+
+------------------------------------------------------------
+-- Conditional compilation block pairing
+--
+-- Mirrors vscode analyzer.checkConditionalBlocks:
+--   #ifdef / #ifndef / #if ... #elif / #else / #endif pairing.
+------------------------------------------------------------
+
+local conditional_directives = {
+    ifdef = true,
+    ifndef = true,
+    ["if"] = true,
+    elif = true,
+    ["else"] = true,
+    endif = true,
+}
+
+local function check_conditionals(result, bufnr)
+    local source_lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+
+    local stack = {}
+
+    for idx, raw_line in ipairs(source_lines) do
+        local line = raw_line:gsub("\r$", "")
+
+        local directive = line:match("^%s*#%s*(%w+)")
+
+        if directive and conditional_directives[directive] then
+            local zero_line = idx - 1
+
+            local hash_col = (line:find("#", 1, true) or 1) - 1
+
+            if directive == "ifdef" or directive == "ifndef" or directive == "if" then
+                table.insert(stack, { dir = directive, line = zero_line, column = hash_col, has_else = false })
+            elseif directive == "elif" then
+                if #stack == 0 then
+                    add(result, { line = zero_line, column = hash_col, end_line = zero_line, end_column = hash_col + #directive },
+                        "error", "cond-stray-elif", "#elif without matching #if")
+                elseif stack[#stack].has_else then
+                    add(result, { line = zero_line, column = hash_col, end_line = zero_line, end_column = hash_col + #directive },
+                        "error", "cond-elif-after-else", "#elif after #else")
+                end
+            elseif directive == "else" then
+                if #stack == 0 then
+                    add(result, { line = zero_line, column = hash_col, end_line = zero_line, end_column = hash_col + #directive },
+                        "error", "cond-stray-else", "#else without matching #if")
+                elseif stack[#stack].has_else then
+                    add(result, { line = zero_line, column = hash_col, end_line = zero_line, end_column = hash_col + #directive },
+                        "error", "cond-duplicate-else", "duplicate #else")
+                else
+                    stack[#stack].has_else = true
+                end
+            elseif directive == "endif" then
+                if #stack == 0 then
+                    add(result, { line = zero_line, column = hash_col, end_line = zero_line, end_column = hash_col + #directive },
+                        "error", "cond-stray-endif", "#endif without matching #if")
+                else
+                    table.remove(stack)
+                end
+            end
+        end
+    end
+
+    for _, open in ipairs(stack) do
+        add(result, { line = open.line, column = open.column, end_line = open.line, end_column = open.column + #open.dir },
+            "error", "cond-unclosed", "unclosed #" .. open.dir)
+    end
+end
 
 local function build(bufnr)
     local semantic_document = document.get(bufnr)
@@ -614,6 +882,15 @@ local function build(bufnr)
     check_delimiters(result, bufnr)
 
     check_missing_semicolons(result, bufnr)
+
+    -- vscode-parity diagnostics
+    check_includes(result, bufnr)
+
+    check_duplicate_declarations(result, semantic_document)
+
+    check_processor_returns(result, bufnr, semantic_document)
+
+    check_conditionals(result, bufnr)
 
     return result
 end

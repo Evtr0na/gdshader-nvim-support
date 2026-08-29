@@ -54,6 +54,7 @@ local defaults = {
         definition = "gd",
         references = "grr",
         rename = "grn",
+        edit = false,   -- set to a key (e.g. "<leader>ce") to open the color editor
     },
 
     --------------------------------------------------------
@@ -86,6 +87,12 @@ local defaults = {
     --------------------------------------------------------
 
     color = {
+        -- Color editor backend for :GDShaderEditColor.
+        --   "auto"    -> use ccc.nvim when installed, else builtin
+        --   "builtin" -> always the built-in floating editor
+        --   "ccc"     -> always ccc.nvim (falls back to builtin if absent)
+        editor = "auto",
+
         decorate = false,
         debounce_ms = 200,
     },

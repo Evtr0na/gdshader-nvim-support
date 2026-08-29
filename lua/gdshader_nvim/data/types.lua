@@ -9,6 +9,7 @@ local base = {
     "int",
     "uint",
     "float",
+    "void",
 
     --------------------------------------------------------
     -- Boolean vectors

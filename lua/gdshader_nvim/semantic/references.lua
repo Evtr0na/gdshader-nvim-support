@@ -63,68 +63,120 @@ end
 -- Semantic target
 ------------------------------------------------------------
 
+------------------------------------------------------------
+-- Collect user-defined struct names (token based)
+------------------------------------------------------------
+
+local function collect_struct_names(bufnr)
+    local lexed = syntax_source.get_lexed(bufnr)
+
+    local tokens = lexed.tokens or {}
+
+    local names = {}
+
+    local expect_name = false
+
+    for _, tok in ipairs(tokens) do
+        if token.is_comment(tok) then
+            -- comments never separate `struct` from its name
+        elseif tok.kind == TokenKind.KEYWORD and tok.value == "struct" then
+            expect_name = true
+        elseif expect_name then
+            if tok.kind == TokenKind.IDENTIFIER then
+                names[tok.value] = true
+            end
+
+            expect_name = false
+        end
+    end
+
+    return names
+end
+
 function M.target_at(bufnr, row, column)
     local info = symbol_at.resolve(bufnr, row, column)
 
-    if not info then
-        return nil
-    end
+    if info then
+        --------------------------------------------------------
+        -- Variable / parameter / uniform / varying / const
+        --------------------------------------------------------
 
-    --------------------------------------------------------
-    -- Variable / parameter / uniform / varying / const
-    --------------------------------------------------------
+        if info.kind == "user_symbol" then
+            local key = symbol_key(info.symbol)
 
-    if info.kind == "user_symbol" then
-        local key = symbol_key(info.symbol)
+            if not key then
+                return nil
+            end
 
-        if not key then
-            return nil
+            return {
+                kind = "symbol",
+
+                name = info.word,
+
+                symbol_key = key,
+
+                symbol = info.symbol,
+
+                range = info.range,
+
+                cursor_column = column,
+            }
         end
 
-        return {
-            kind = "symbol",
+        --------------------------------------------------------
+        -- User function
+        --
+        -- 当前函数 overload 仍以同名 family 处理。
+        --------------------------------------------------------
 
-            name = info.word,
+        if info.kind == "user_function" then
+            return {
+                kind = "function",
 
-            symbol_key = key,
+                name = info.word,
 
-            symbol = info.symbol,
+                functions = info.functions,
 
-            range = info.range,
+                range = info.range,
 
-            cursor_column = column,
-        }
+                cursor_column = column,
+            }
+        end
     end
 
     --------------------------------------------------------
-    -- User function
+    -- User-defined struct type name
     --
-    -- 当前函数 overload 仍以同名 family 处理。
-    --
-    -- 例如：
-    --
-    -- float foo(float x)
-    -- vec3 foo(vec3 x)
-    --
-    -- rename foo 时整组一起 rename。
+    -- 与 VSCode 一致：可重命名 struct 类型名（声明、类型引用、
+    -- 构造器、返回类型等处一并重命名）。
     --------------------------------------------------------
 
-    if info.kind == "user_function" then
-        return {
-            kind = "function",
+    local word_info = symbol_at.get_word_at(bufnr, row, column)
 
-            name = info.word,
+    if word_info then
+        local struct_names = collect_struct_names(bufnr)
 
-            functions = info.functions,
+        if struct_names[word_info.word] then
+            return {
+                kind = "type",
 
-            range = info.range,
+                name = word_info.word,
 
-            cursor_column = column,
-        }
+                range = {
+                    line = row,
+
+                    start_column = word_info.start_column,
+
+                    end_column = word_info.end_column,
+                },
+
+                cursor_column = column,
+            }
+        end
     end
 
     --------------------------------------------------------
-    -- Built-in / processor / type / keyword 等不可 rename。
+    -- Built-in / processor / 基础类型 / keyword 等不可 rename。
     --------------------------------------------------------
 
     return nil
@@ -288,9 +340,70 @@ end
 -- Find references
 ------------------------------------------------------------
 
+------------------------------------------------------------
+-- Find references of a user-defined struct type name
+------------------------------------------------------------
+
+local function find_struct_references(bufnr, target)
+    local lexed = syntax_source.get_lexed(bufnr)
+
+    local tokens = lexed.tokens or {}
+
+    local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+
+    local result = {}
+
+    for index, item in ipairs(tokens) do
+        if item.kind == TokenKind.IDENTIFIER and item.value == target.name then
+            --------------------------------------------------------
+            -- 跳过成员访问 `obj.Name`（Name 是成员而非类型名）。
+            --------------------------------------------------------
+
+            local prev = previous_significant(tokens, index)
+
+            if not (prev and prev.value == ".") then
+                local is_decl = prev and prev.kind == TokenKind.KEYWORD and prev.value == "struct"
+
+                table.insert(result, {
+                    line = item.line,
+
+                    column = item.column,
+
+                    end_line = item.line,
+
+                    end_column = item.column + #item.value,
+
+                    text = lines[item.line + 1] or "",
+
+                    declaration = is_decl,
+                })
+            end
+        end
+    end
+
+    table.sort(result, function(a, b)
+        if a.line ~= b.line then
+            return a.line < b.line
+        end
+
+        return a.column < b.column
+    end)
+
+    return result
+end
+
 function M.find(bufnr, target)
     if not target then
         return {}
+    end
+
+    --------------------------------------------------------
+    -- 用户自定义 struct 类型名：收集所有出现（构造器 / 类型引用 /
+    -- 返回类型 / 声明），与 VSCode 一致。
+    --------------------------------------------------------
+
+    if target.kind == "type" then
+        return find_struct_references(bufnr, target)
     end
 
     local lexed = syntax_source.get_lexed(bufnr)

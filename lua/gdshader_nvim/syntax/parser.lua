@@ -46,6 +46,8 @@ function Parser.new(tokens)
 
         diagnostics = {},
 
+        user_types = collect_user_types(tokens),
+
         eof_token = make_fallback_eof(tokens),
     }, Parser)
 end
@@ -131,6 +133,18 @@ function Parser:is_eof()
     return self:peek().kind == TokenKind.EOF
 end
 
+------------------------------------------------------------
+-- User-defined (struct) type
+------------------------------------------------------------
+
+function Parser:is_user_type(item)
+    return item and item.kind == TokenKind.IDENTIFIER and self.user_types[item.value] == true
+end
+
+function Parser:is_declarable_type(item)
+    return is_type(item) or self:is_user_type(item)
+end
+
 function Parser:check_value(value)
     return self:peek().value == value
 end
@@ -179,6 +193,30 @@ end
 
 local function is_type(item)
     return item and item.kind == TokenKind.TYPE
+end
+
+------------------------------------------------------------
+-- User-defined types
+--
+-- Collect struct names up front so the single-pass parser can
+-- treat them as declarable types (variable / function return
+-- types) the way the VS Code analyzer does.
+------------------------------------------------------------
+
+local function collect_user_types(tokens)
+    local names = {}
+
+    for index, item in ipairs(tokens) do
+        if item.kind == TokenKind.KEYWORD and item.value == "struct" then
+            local name_token = tokens[index + 1]
+
+            if name_token and name_token.kind == TokenKind.IDENTIFIER then
+                names[name_token.value] = true
+            end
+        end
+    end
+
+    return names
 end
 
 ------------------------------------------------------------
@@ -317,37 +355,118 @@ end
 function Parser:parse_qualified_declaration()
     local qualifier = self:advance()
 
-    local node = ast.new(AstKind.DECLARATION, qualifier)
-
-    node.declaration_kind = qualifier.value
-
     local type_item = self:peek()
 
-    if not is_type(type_item) then
+    if not is_type(type_item) and not self:is_user_type(type_item) then
         self:error_at(type_item, "Expected type after " .. qualifier.value)
 
-        return ast.finish(node, qualifier)
+        local node = ast.new(AstKind.DECLARATION, qualifier)
+
+        node.declaration_kind = qualifier.value
+
+        return { ast.finish(node, qualifier) }
     end
 
     self:advance()
 
-    node.data_type = type_item.value
+    local type_name = type_item.value
+
+    --------------------------------------------------------
+    -- Build one declaration node for a name.
+    --------------------------------------------------------
+
+    local function make_decl(name_token)
+        local node = ast.new(AstKind.DECLARATION, name_token)
+
+        node.declaration_kind = qualifier.value
+
+        node.data_type = type_name
+
+        node.name = name_token.value
+
+        node.name_token = name_token
+
+        return node
+    end
 
     local name = self:peek()
 
     if not is_identifier(name) then
         self:error_at(name, "Expected declaration name")
 
-        return ast.finish(node, type_item)
+        local node = ast.new(AstKind.DECLARATION, qualifier)
+
+        node.declaration_kind = qualifier.value
+
+        node.data_type = type_name
+
+        return { ast.finish(node, type_item) }
     end
 
     self:advance()
 
-    node.name = name.value
+    local first = make_decl(name)
 
-    node.name_token = name
+    local nodes = { first }
 
-    return self:parse_declaration_tail(node, name)
+    --------------------------------------------------------
+    -- Multi-variable declarations:
+    --
+    --   uniform float a, b;
+    --   const int X = 1, Y = 2;
+    --
+    -- Each name becomes its own top-level declaration so
+    -- completion / hover / definition see every symbol
+    -- (matches the VS Code analyzer's pendingVarDecls).
+    --------------------------------------------------------
+
+    while not self:is_eof() do
+        local item = self:peek()
+
+        if item.value == ";" then
+            self:advance()
+
+            break
+        elseif item.value == "," then
+            self:advance()
+
+            local next_name = self:peek()
+
+            if not is_identifier(next_name) then
+                break
+            end
+
+            self:advance()
+
+            local decl = make_decl(next_name)
+
+            ----------------------------------------------------
+            -- Optional array size: NAME[4]
+            ----------------------------------------------------
+
+            if self:check_value("[") then
+                decl.is_array = true
+
+                while not self:is_eof() and not self:check_value("]") do
+                    self:advance()
+                end
+
+                if self:check_value("]") then
+                    self:advance()
+                end
+            end
+
+            table.insert(nodes, decl)
+        else
+            ----------------------------------------------------
+            -- Unexpected token; stop collecting.
+            ----------------------------------------------------
+
+            break
+        end
+    end
+
+    return nodes
 end
 
 ------------------------------------------------------------
@@ -602,7 +721,7 @@ function Parser:is_local_declaration_start()
     -- type
     --------------------------------------------------------
 
-    if not is_type(item) then
+    if not is_type(item) and not self:is_user_type(item) then
         return false
     end
 
@@ -1273,19 +1392,21 @@ function Parser:parse_modifier_declaration()
         return nil
     end
 
-    local node = self:parse_qualified_declaration()
+    local nodes = self:parse_qualified_declaration()
 
-    if node then
-        node.modifier = modifier.value
+    if nodes then
+        for _, node in ipairs(nodes) do
+            node.modifier = modifier.value
 
-        node.start_line = modifier.line
+            node.start_line = modifier.line
 
-        node.start_column = modifier.column
+            node.start_column = modifier.column
 
-        node.start_offset = modifier.offset
+            node.start_offset = modifier.offset
+        end
     end
 
-    return node
+    return nodes
 end
 
 ------------------------------------------------------------
@@ -1323,6 +1444,207 @@ function Parser:parse_preprocessor()
     end
 
     return ast.finish(node, last)
+end
+
+------------------------------------------------------------
+-- Struct
+--
+-- struct MyStruct {
+--     vec3 position;
+--     vec4 color;
+--     float weights[4];
+-- };
+------------------------------------------------------------
+
+function Parser:parse_struct()
+    local start = self:advance()
+
+    local node = ast.new(AstKind.STRUCT, start)
+
+    node.members = {}
+
+    local name = self:peek()
+
+    if is_identifier(name) then
+        self:advance()
+
+        node.name = name.value
+
+        node.name_token = name
+    else
+        self:error_at(name, "Expected struct name")
+    end
+
+    if not self:match_value("{") then
+        self:error_at(self:peek(), "Expected '{' after struct name")
+
+        return ast.finish(node, name or start)
+    end
+
+    while not self:is_eof() do
+        local item = self:peek()
+
+        if item.value == "}" then
+            self:advance()
+
+            break
+        end
+
+        ----------------------------------------------------
+        -- Member: TYPE|USER_TYPE NAME ['[' SIZE ']'] ';'
+        ----------------------------------------------------
+
+        local type_item = self:peek()
+
+        local member_type = nil
+
+        if is_type(type_item) or self:is_user_type(type_item) then
+            self:advance()
+
+            member_type = type_item.value
+        else
+            self:error_at(type_item, "Expected struct member type")
+
+            break
+        end
+
+        local member_name = self:peek()
+
+        if not is_identifier(member_name) then
+            self:error_at(member_name, "Expected struct member name")
+
+            break
+        end
+
+        self:advance()
+
+        local member = {
+            name = member_name.value,
+
+            type = member_type,
+
+            is_array = false,
+
+            name_token = member_name,
+
+            start_line = member_name.line,
+
+            start_column = member_name.column,
+
+            end_line = member_name.end_line,
+
+            end_column = member_name.end_column,
+        }
+
+        ----------------------------------------------------
+        -- Consume to ';', honoring '[' ... ']'.
+        ----------------------------------------------------
+
+        while not self:is_eof() do
+            local t = self:peek()
+
+            if t.value == ";" then
+                self:advance()
+
+                break
+            elseif t.value == "{" or t.value == "}" then
+                break
+            elseif t.value == "[" then
+                member.is_array = true
+
+                self:advance()
+
+                while not self:is_eof() and not self:check_value("]") do
+                    self:advance()
+                end
+
+                if self:check_value("]") then
+                    self:advance()
+                end
+            else
+                self:advance()
+            end
+        end
+
+        table.insert(node.members, member)
+    end
+
+    --------------------------------------------------------
+    -- Optional trailing ';' (struct MyStruct { ... };)
+    --------------------------------------------------------
+
+    if self:check_value(";") then
+        self:advance()
+    end
+
+    local last_token = node.name_token or start
+
+    return ast.finish(node, last_token)
+end
+
+------------------------------------------------------------
+-- group_uniforms
+--
+-- group_uniforms GroupName {
+--     uniform float amount = 1.0;
+--     uniform vec4 tint : source_color = vec4(1.0);
+-- };
+--
+-- The block only groups uniforms in the inspector; every
+-- inner declaration is still a global symbol, so we surface
+-- them as ordinary top-level declarations.
+------------------------------------------------------------
+
+function Parser:parse_group_uniforms()
+    --------------------------------------------------------
+    -- group_uniforms GroupName {
+    --------------------------------------------------------
+
+    self:advance() -- group_uniforms
+
+    if is_identifier(self:peek()) then
+        self:advance() -- group name
+    end
+
+    if not self:match_value("{") then
+        return {}
+    end
+
+    local nodes = {}
+
+    while not self:is_eof() do
+        local item = self:peek()
+
+        if item.value == "}" then
+            self:advance()
+
+            break
+        end
+
+        local inner = nil
+
+        if item.value == "uniform" or item.value == "varying" or item.value == "const" then
+            inner = self:parse_qualified_declaration()
+        elseif self:is_declarable_type(item) then
+            inner = { self:parse_type_item() }
+        else
+            self:advance()
+
+            inner = nil
+        end
+
+        if inner then
+            for _, n in ipairs(inner) do
+                table.insert(nodes, n)
+            end
+        end
+    end
+
+    if self:check_value(";") then
+        self:advance()
+    end
+
+    return nodes
 end
 
 ------------------------------------------------------------
@@ -1396,6 +1718,29 @@ function Parser:parse_document()
         ----------------------------------------------------
         -- global uniform / instance uniform
         ----------------------------------------------------
+        ----------------------------------------------------
+        -- flat / smooth interpolation qualifier before varying
+        ----------------------------------------------------
+
+        elseif item.value == "flat" or item.value == "smooth" then
+            self:advance()
+
+            node = self:parse_qualified_declaration()
+
+        ----------------------------------------------------
+        -- struct
+        ----------------------------------------------------
+
+        elseif item.value == "struct" then
+            node = self:parse_struct()
+
+        ----------------------------------------------------
+        -- group_uniforms
+        ----------------------------------------------------
+
+        elseif item.value == "group_uniforms" then
+            node = self:parse_group_uniforms()
+
         elseif item.value == "global" or item.value == "instance" then
             node = self:parse_modifier_declaration()
 
@@ -1406,7 +1751,7 @@ function Parser:parse_document()
         ----------------------------------------------------
         -- Function / global variable
         ----------------------------------------------------
-        elseif is_type(item) then
+        elseif self:is_declarable_type(item) then
             node = self:parse_type_item()
 
         ----------------------------------------------------
@@ -1423,7 +1768,13 @@ function Parser:parse_document()
         end
 
         if node then
-            table.insert(document.declarations, node)
+            if node.kind then
+                table.insert(document.declarations, node)
+            else
+                for _, sub in ipairs(node) do
+                    table.insert(document.declarations, sub)
+                end
+            end
         end
     end
 
