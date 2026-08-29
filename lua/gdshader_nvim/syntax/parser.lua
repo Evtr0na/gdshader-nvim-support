@@ -36,6 +36,29 @@ local function make_fallback_eof(tokens)
     return token.new(TokenKind.EOF, "", line, column, offset, line, column, offset)
 end
 
+--
+-- Collect struct names up front so the single-pass parser can
+-- treat them as declarable types (variable / function return
+-- types) the way the VS Code analyzer does.
+------------------------------------------------------------
+
+local function collect_user_types(tokens)
+    local names = {}
+
+    for index, item in ipairs(tokens) do
+        if item.kind == TokenKind.KEYWORD and item.value == "struct" then
+            local name_token = tokens[index + 1]
+
+            if name_token and name_token.kind == TokenKind.IDENTIFIER then
+                names[name_token.value] = true
+            end
+        end
+    end
+
+    return names
+end
+
+
 function Parser.new(tokens)
     tokens = tokens or {}
 
@@ -197,28 +220,6 @@ end
 
 ------------------------------------------------------------
 -- User-defined types
---
--- Collect struct names up front so the single-pass parser can
--- treat them as declarable types (variable / function return
--- types) the way the VS Code analyzer does.
-------------------------------------------------------------
-
-local function collect_user_types(tokens)
-    local names = {}
-
-    for index, item in ipairs(tokens) do
-        if item.kind == TokenKind.KEYWORD and item.value == "struct" then
-            local name_token = tokens[index + 1]
-
-            if name_token and name_token.kind == TokenKind.IDENTIFIER then
-                names[name_token.value] = true
-            end
-        end
-    end
-
-    return names
-end
-
 ------------------------------------------------------------
 -- Shader type
 --
