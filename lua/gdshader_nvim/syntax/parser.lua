@@ -160,6 +160,10 @@ end
 -- User-defined (struct) type
 ------------------------------------------------------------
 
+local function is_type(item)
+    return item and item.kind == TokenKind.TYPE
+end
+
 function Parser:is_user_type(item)
     return item and item.kind == TokenKind.IDENTIFIER and self.user_types[item.value] == true
 end
@@ -208,14 +212,6 @@ end
 
 local function is_identifier(item)
     return item and item.kind == TokenKind.IDENTIFIER
-end
-
-------------------------------------------------------------
--- Type
-------------------------------------------------------------
-
-local function is_type(item)
-    return item and item.kind == TokenKind.TYPE
 end
 
 ------------------------------------------------------------

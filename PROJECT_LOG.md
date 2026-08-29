@@ -125,3 +125,45 @@ require("gdshader_nvim").setup({
   }) end,
 }
 ```
+
+## 修复：parser `is_type` 前向引用导致 LSP 崩溃
+
+### 现象
+LSP 客户端 `gdscript` 以 `exit code 1` 退出，日志报：
+```
+vim.schedule callback: ...dshader-nvim-support/lua/gdshader_nvim/syntax/parser.lua:168:
+attempt to call global 'is_type' (a nil value)
+```
+调用链：`parse → parse_document → is_declarable_type → is_type`。
+
+### 根因（关键）
+`is_type` 是一个 `local function`，原始定义在文件靠后（~第 217 行），
+而 `Parser:is_declarable_type`（~第 168 行）在它**之前**调用了它。
+Lua 的 `local` 函数只在定义语句处才完成绑定，定义点之前的引用看到的是尚未赋值的 `nil`。
+
+### 第一次修复尝试（错误，记录以避坑）
+曾尝试在使用前加前向声明：
+```lua
+local is_type  -- forward declaration
+```
+但随后仍保留 `local function is_type(item)` 定义。问题在于 `local function f()`
+等价于 `local f; f = function() end`——它会**再声明一个同名但不同的 local 变量**。
+于是 `is_declarable_type` 的闭包捕获的是前向声明那个（永不赋值、始终为 `nil`）的 `is_type`，
+而函数体被绑定到了另一个同名的局部变量上，运行时依旧报
+`attempt to call upvalue 'is_type' (a nil value)`。**前向声明 + 保留 `local function` 定义无效。**
+
+### 正确修复
+直接把 `local function is_type(item)` 的定义**整体移到**首次使用之前：
+- 删除原位于「-- Type --」注释段下的 `local function is_type(item) ... end`。
+- 在 `is_user_type` / `is_declarable_type` 之前插入该定义（现第 163 行）。
+- 这样只存在**一个** `local is_type`，且在使用点之前完成绑定，闭包捕获的即为其本身。
+
+### 改动文件
+- `lua/gdshader_nvim/syntax/parser.lua`
+  - 第 163 行新增 `local function is_type(item)`（上移）。
+  - 删除原靠后的重复定义（原 ~217–219 行）。
+  - 无逻辑改动，仅调整定义顺序。
+
+### 验证
+重新加载 nvim 配置 / 重启 LSP 客户端后，确认 `Client gdscript quit with exit code 1`
+不再出现，诊断（diagnostics）可正常刷新。
