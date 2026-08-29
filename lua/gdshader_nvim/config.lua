@@ -95,6 +95,11 @@ local defaults = {
 
         decorate = false,
         debounce_ms = 200,
+
+        -- The symbol drawn before each vec3/vec4 color literal when
+        -- decoration is on. Change it (e.g. "■", "⬛", "#", "●") and
+        -- re-toggle / re-edit to apply. Empty string falls back to "■".
+        swatch = "■",
     },
 
     --------------------------------------------------------

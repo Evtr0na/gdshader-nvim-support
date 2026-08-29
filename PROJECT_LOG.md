@@ -167,3 +167,36 @@ local is_type  -- forward declaration
 ### 验证
 重新加载 nvim 配置 / 重启 LSP 客户端后，确认 `Client gdscript quit with exit code 1`
 不再出现，诊断（diagnostics）可正常刷新。
+
+## 增强：颜色色块显示在字面量前且符号可配置
+
+### 需求
+用户希望行内色块（decoration swatch）显示在每个 `vec3` / `vec4` 颜色字面量**之前**（而非行尾），
+且方块符号可通过配置改成其他字符（如 `⬛` `#` `●` 等）。
+
+### 改动
+- `lua/gdshader_nvim/config.lua`：`color` 表新增 `swatch = "■"`（空串回退为 `■`）。
+- `lua/gdshader_nvim/color.lua`（`M.refresh`）：
+  - 读取 `config.color.swatch`（空/缺失则回退 `■`）。
+  - extmark 列由 `match.end_col` 改为 `match.start_col`（即 `vecN` 之前），
+    `virt_text_pos` 由 `"eol"` 改为 `"inline"`，从而把符号内联到字面量前方。
+
+### 使用
+```lua
+require("gdshader_nvim").setup({
+  color = {
+    decorate = true,       -- 常驻行内色块
+    swatch = "■",          -- 可改为 "⬛" / "#" / "●" 等，改后重开/重编辑即生效
+  },
+})
+```
+运行时改符号：`require("gdshader_nvim.config").get().color.swatch = "⬛"` 后
+执行 `:GDShaderColorDecoration`（关→开）或编辑缓冲区触发刷新即可生效。
+
+### 改动文件
+- `lua/gdshader_nvim/config.lua`（新增 `color.swatch`）
+- `lua/gdshader_nvim/color.lua`（`M.refresh` 读取符号 + 改为 inline 前置）
+
+### 验证
+decorate 开启后，每个 [0,1] 区间内的 `vec3/vec4` 字面量前出现对应颜色的方块；
+修改 `swatch` 配置后刷新即显示新符号。

@@ -270,6 +270,12 @@ function M.refresh(bufnr)
         return
     end
 
+    local swatch = config.color.swatch
+
+    if not swatch or swatch == "" then
+        swatch = "■"
+    end
+
     vim.api.nvim_buf_clear_namespace(bufnr, namespace, 0, -1)
 
     local line_count = vim.api.nvim_buf_line_count(bufnr)
@@ -291,9 +297,9 @@ function M.refresh(bufnr)
 
                 local hl_name, _ = swatch_hl(r, g, b)
 
-                pcall(vim.api.nvim_buf_set_extmark, bufnr, namespace, row, match.end_col, {
-                    virt_text = { { " ■", hl_name } },
-                    virt_text_pos = "eol",
+                pcall(vim.api.nvim_buf_set_extmark, bufnr, namespace, row, match.start_col, {
+                    virt_text = { { swatch, hl_name } },
+                    virt_text_pos = "inline",
                 })
             end
         end
