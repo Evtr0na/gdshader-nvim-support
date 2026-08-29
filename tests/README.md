@@ -20,6 +20,10 @@ header comment.
 | unclosed_cond.gdshader | error: unclosed #if |
 | hint_comments.gdshader | no diagnostics (hint comments recognised) |
 | color_sample.gdshader | inline swatches on vec3/vec4; :GDShaderEditColor works |
+| param_shadow.gdshader | warning: parameter shadowing (local var 'idx' shadows param 'idx') |
+| type_mismatch.gdshader | error: type mismatch (decl init `float x = vec3(...)`; assignment `vec3 = float`) |
+| call_args.gdshader | error: arg-count (combine expects 2, got 1); error: arg-type (param 'b' float, got vec3) |
+| builtin_call_args.gdshader | error: arg-count (texture/sin 缺参); error: arg-type (texture 第1参 sampler2D 收 vec3); dot 泛型无误报 |
 
 A future harness can parse `:GDShader...` diagnostics programmatically; for now
 these files serve as a manual regression checklist and as inputs for any

@@ -318,6 +318,16 @@ function Scanner:read_number()
             self:advance()
         end
 
+        --------------------------------------------------------
+        -- 无效数字字面量：
+        -- GDShader 标识符不能以数字开头，
+        -- 所以 0x1Fg / 1abc 不是合法 token。
+        --------------------------------------------------------
+
+        if is_ident_start(self:peek()) then
+            self:add_diagnostic(start, "Invalid number literal: digits must not be immediately followed by a letter")
+        end
+
         self:emit(is_uint and Kind.UINT or Kind.INT, start)
 
         return
@@ -416,6 +426,17 @@ function Scanner:read_number()
         kind = Kind.FLOAT
     elseif is_uint then
         kind = Kind.UINT
+    end
+
+    --------------------------------------------------------
+    -- 无效数字字面量：
+    -- 数字后紧跟字母 / 下划线不是合法 token
+    -- （GDShader 标识符不能以数字开头）。
+    -- 例：1sdfasaf / 1.5xyz / 12.3e4abc
+    --------------------------------------------------------
+
+    if is_ident_start(self:peek()) then
+        self:add_diagnostic(start, "Invalid number literal: digits must not be immediately followed by a letter")
     end
 
     self:emit(kind, start)

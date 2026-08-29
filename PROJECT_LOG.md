@@ -1,4 +1,8 @@
+# ---------------------------------------------------------------
+# 每一次修改都要写日志
+# ---------------------------------------------------------------
 # 项目推进日志 . GDShader nvim 版
+
 
 > 对照基准：D:\2zhuomian\app\source\gdshader-src（gdshader-vscode-support）
 > 本仓库：D:\2zhuomian\app\source\gdshader-nvim-support（gdshader-nvim-support）
@@ -370,3 +374,337 @@ headless 复现（n=3/4/5）确认三种情况均生成正确 `vecN(...)` 且不
 ### 改动文件
 - `lua/gdshader_nvim/color.lua`（`clamp01` 防 nil；ccc / 内置两条写回路径按 `n` 完整构造分量）
 - `lua/gdshader_nvim/config.lua`（`is_list` 用 `vim.islist` 优先，回退 `vim.tbl_islist`）
+## 修复：缺失分号误报（块闭合 '}' 与预处理器行）
+
+### 现象（用户报告两例，对照 Godot / vscode 行为）
+
+1. 第二个样例在 remap 函数正常的闭合 '}'（编辑器报 [11, 1]）处误报
+   Missing ';' at end of statement (missing-semicolon)，但 Godot 不报错。
+2. 第一个样例本应报错却（几乎）没有：123 = vec3(1.0,1.0,1.0) 这一行缺 ';'
+   未被指出，且整体报错不充分。
+
+### 根因（均在 lua/gdshader_nvim/semantic/diagnostics.lua 的 check_missing_semicolons）
+
+- is_value_end() 把 '}' 当成一个“值结尾 token”。于是块闭合的 '}' 会被误认为
+  “一条需要 ';' 的语句结尾”。
+- is_continuation() 又把 '}' 当作“延续 token”（本意是吸收前一条缺 ';' 的语句）。
+  二者组合导致：当 '}' 之后是新的顶层条目（如下一个函数 void）时，'}' 作为
+  value-end 触发误报；而它前面真正缺 ';' 的语句（如 123 = vec3(...)）反被 '}' 吞掉。
+- 另：预处理器指令整行（如 #ifdef EXTRA）上的标识符 token 被纳入扫描，
+  对 #ifdef EXTRA 也会误报缺 ';'（与本次对齐目标同类，一并修复）。
+
+### 修复
+
+- is_value_end()：punctuation 集合去掉 '}'（块结束符不代表“一个需要 ';' 的值”；
+  '(' 本就不在此列）。仅保留 ')' / ']' 作值结尾。
+- is_continuation()：去掉 '}'（'}' 结束一个块，并非当前语句的延续；其前面若缺 ';'
+  应照常被报出；'{' 保留，因为 if/for/while 条件后的 '{' 是块开始，视作延续）。
+- check_missing_semicolons()：构建 sig 时排除落在预处理器指令行上的 token
+  （#ifdef / #include / #define 独占整行，其后不需要 ';'），避免对这类行误报。
+
+### 验证（headless nvim --headless 跑语义诊断）
+
+- 第二个样例（remap 误报例）：无诊断（误报消失）。
+- 第一个样例（123 = vec3(...) 缺 ';'）：新增 warning missing-semicolon 于该行；
+  stray 的 .0) / '}' 仍报 unmatched-delimiter 及一处多余 missing-semicolon
+  （畸形输入的产物，Godot 同样会报错，属可接受）。
+- 干净 shader：无诊断（确认无回归误报）。
+- 真实缺 ';'（COLOR = vec4(...) 后直接 '}'）：正确在 ')' 处报 missing-semicolon。
+- 12 个回归 fixtures 诊断与 tests/README.md 期望完全一致；
+  unclosed_cond.gdshader 原先多余的 missing-semicolon 误报现已消除，
+  仅保留 cond-unclosed（与文档期望一致）。
+
+### 改动文件
+
+- lua/gdshader_nvim/semantic/diagnostics.lua
+  （is_value_end 移除 }；is_continuation 移除 }；check_missing_semicolons 跳过预处理器行）
+## 修复：无效数字字面量（标识符不能以数字开头）
+
+### 现象（用户新增样例）
+
+```
+shader_type canvas_item;
+
+uniform sampler2D texture_map : source_color;
+
+void fragment() {
+    vec3 color_ =vec3(0.4078, 0.1184, 0.9998);
+    1sdfasaf = vec3(1.0,1.0,1.0);
+}
+```
+
+`1sdfasaf` 没有报错。GDShader 语法规定**标识符不能以数字开头**，
+`1sdfasaf` 是非法 token（原词法器把 `1` + `sdfasaf` 当成两个合法 token，
+于是 `sdfasaf = vec3(...)` 被当成一条普通赋值，整体静默通过）。
+
+### 对齐参考
+
+- vscode 版：把 `1` 解析成表达式语句，`expect(';')` 失败 → 报 “Expected ';'”。
+- Godot：词法层拒绝 `1sdfasaf`，报无效 token / 期望语句结束。
+- 按用户“对齐 vscode，必要时遵循 gdshader 语法”的指示，采用更精确的
+  **词法层无效数字字面量**诊断（根因错误），既对齐 Godot，又让该行列被标红。
+
+### 修复
+
+- `lua/gdshader_nvim/syntax/lexer.lua`（`read_number`）：数字完整读出后，
+  若紧邻的下一个字符是标识符起始（字母 / 下划线，无空白），则追加词法诊断
+  `Invalid number literal: digits must not be immediately followed by a letter`。
+  - 十六进制分支（`0x…`）与十进制/小数/指数/后缀分支均覆盖。
+- 该检查**不会误伤合法代码**：合法 GDShader 中数字后永远是运算符 / 标点 / 空白，
+  不会与字母/下划线紧贴（如 `vec3(1.0)`、`0xFF`、`1e3`、`1.0f` 均安全）。
+
+### 验证（headless nvim --headless）
+
+- `1sdfasaf = vec3(1.0,1.0,1.0);`：**报 error `syntax: Invalid number literal`** ✅。
+- `0x1Fg`、`1.5xyz`、`12.3e4abc` 等边角 case：同样被报出 ✅。
+- 合法数字着色样例（`1.5` / `0xFF` / `1e3` / `0.5` / `vec3(1.0,2.0,3.0)` / `v.x`）：
+  **无任何误报** ✅。
+- 12 个回归 fixtures 诊断与 `tests/README.md` 期望完全一致（无新增误报）。
+
+### 改动文件
+
+- `lua/gdshader_nvim/syntax/lexer.lua`（`read_number`：两个分支各加无效数字字面量诊断）
+## 对比 vscode 版与 nvim 版报错逻辑 & 弥补差距：未定义标识符
+
+### 报错逻辑对比（vscode 版 vs nvim 版）
+
+| 诊断类别 | vscode 版 | nvim 版（修复前） | 差距 |
+| --- | --- | --- | --- |
+| 词法：未知字符 / 未闭合注释 / 未闭合字符串 | ✅ | ✅ | 对齐 |
+| 词法：畸形数字指数 | ✅ | ✅ | 对齐 |
+| 词法：非法数字字面量（`1sdfasaf`） | ❌（拆成 `1`+`sdfasaf`，间接报缺 `;`） | ⚠️ 新增（上一节）：`syntax: Invalid number literal` | nvim 更精确 |
+| 解析：缺 `;`（多处 expect） | ✅ 严格 | ⚠️ 启发式 `check_missing_semicolons`（已修 `}`/预处理器误报） | 基本对齐 |
+| 语义：未定义标识符 | ✅ `undefinedIdent` warning | ❌ 完全没有 | **差距（已补）** |
+| 语义：重复声明 / 重复函数 / 重复参数 | ✅ | ✅ | 对齐 |
+| 语义：重复 struct 成员 | ✅ | ⚠️ 经 parser 部分覆盖 | 近似 |
+| 语义：参数遮蔽 warning | ✅ | ❌ | 小差距（暂未补） |
+| 语义：return 出现在 processor | ✅ | ✅ | 对齐 |
+| 语义：discard 位置 | ✅ | ✅ | 对齐 |
+| 语义：内置变量只读 | ✅ | ✅ | 对齐 |
+| 语义：类型不匹配（赋值 / 变量初始化） | ✅ error | ❌ | 大差距（暂未补，需完整表达式类型推断，基础设施已具备） |
+| 语义：条件编译块配对 | ✅ | ✅ | 对齐 |
+| 提供方：#include 解析 / 重定向 / res:// | ✅ | ✅ | 对齐 |
+| 提供方：缺 shader_type / 非法 shader_type / 非法 processor | ✅ | ✅ | 对齐 |
+
+结论：nvim 在“结构 / 语法 / 作用域”类诊断已高度对齐 vscode；
+最大的一块缺失是 **未定义标识符**（vscode 的 `analyzer.undefinedIdent`），
+本轮将其补齐。类型不匹配虽属大差距，但依赖完整表达式类型推断，
+基础设施（`inference.lua` / `semantic_types.lua` / `context.lua`）已就位，留待后续。
+
+### 本轮新增：未定义标识符检测（对齐 vscode `analyzer.undefinedIdent`）
+
+#### 现象
+`COLOR = nonexistent_func();`、`float x = y + 1.0;` 这类引用了不存在标识符的
+语句，nvim 此前完全不报错，而 vscode 会给出 `undefinedIdent` warning。
+
+#### 实现
+`lua/gdshader_nvim/semantic/diagnostics.lua` 新增 `check_undefined_identifiers`：
+- 遍历每个函数体行范围内的词法 token，收集标识符引用。
+- 跳过成员 / swizzle 访问（`a.b` / `a.b.c` 中的 `b`、`c`，其前一个是 `.`）。
+- 跳过函数名 / 结构体名（声明名，不在变量作用域内，会误判）。
+- 跳过 shader_type 缺失 / 非法的样例（内置变量此时无法可靠解析，
+  避免误伤 `missing_shader_type` / `invalid_shader_type` 等 fixtures）。
+- 跳过存在未 ignored 的 res:// include 的样例（可能来自 include，无法在本文件解析；对齐 vscode `suppressUndefinedCheck`）。
+- 对其余标识符，依次尝试解析：
+  类型 / 结构体 / 内置函数 → 用户符号（local/param/global）→ 内置变量 → 用户函数；
+  全部失败则报 `warning undefined-identifier`。
+- 复用既有基础设施：`context.get_user_symbol` / `get_builtin_variable` /
+  `get_user_functions_by_name`、`semantic_types.is_type`、`knowledge.get("builtin_functions")`。
+
+#### 验证（headless nvim --headless）
+- `COLOR = nonexistent_func();` → `warning undefined-identifier 'nonexistent_func'` ✅
+- `float x = y + 1.0;` → `warning undefined-identifier 'y'` ✅
+- 用户函数内引用未定义变量 `missing_var` → 报出 ✅；同文件已定义的函数 `my_fn` / `square` 正常解析 ✅
+- 12 个回归 fixtures 诊断与 `tests/README.md` 期望**完全一致**，无新增误报 ✅
+- 干净 shader（`spatial_clean` / `hint_comments` / `valid_numbers` /
+  `snippet2` remap / struct 用例 / 用户函数用例）→ **零误报** ✅
+- `1sdfasaf = ...`：词法层 `Invalid number literal` + 语义层
+  `undefined-identifier 'sdfasaf'`（二者均合法，与 vscode 对 `sdfasaf` 报 undefined 一致）
+
+### 改动文件
+- `lua/gdshader_nvim/semantic/diagnostics.lua`
+  （新增 `check_undefined_identifiers`；`build()` 调用；新增 `context` / `semantic_types` 依赖）
+
+### 对齐 vscode 版与 nvim 版报错逻辑 & 弥补差距：参数遮蔽 warning
+
+#### 现象
+函数体内声明的局部变量 / const 若与某个参数同名，nvim 此前不报错；
+vscode 的 `analyzer.analyzeVariableDecl` 会通过 `lookupInEnclosingFunctionScope`
+检查并报 `shadowParam` warning（`Variable "{0}" shadows a parameter with the same name.`）。
+该差距在上一节对比表中列为“语义：参数遮蔽 warning ❌ 小差距（暂未补）”。
+
+#### 实现
+`lua/gdshader_nvim/semantic/diagnostics.lua` 新增 `check_parameter_shadowing`：
+- 遍历 `semantic_document.functions`，取每个函数的 `fn.scope`（函数作用域）。
+- 收集参数名（函数作用域 `symbols` 中 `kind == "parameter"` 者）。
+- 递归扫描函数体各块作用域的局部声明（`kind == "variable" | "const"`）：
+  从“当前块父级”向上找第一个同名符号（`enclosing` 链，最近优先）；
+  **仅当被遮蔽的符号是参数时**报 `warning param-shadow`。
+- 与 vscode 一致：仅当最内层同名符号为 Parameter 才告警；
+  若外层块已有同名局部变量（非参数），则不再视为遮蔽参数，避免误报。
+- `build()` 中在 `check_duplicate_declarations` 之后调用。
+
+#### 验证（headless nvim --headless）
+- 新增 `tests/fixtures/param_shadow.gdshader`：fragment 的参数 `idx` 被局部 `float idx` 遮蔽
+  → 在局部声明处报 `warning param-shadow 'Variable 'idx' shadows a parameter with the same name.'` ✅
+- 同文件 `vertex(float time)` 未遮蔽参数 → 零误报 ✅
+- 13 个原有回归 fixtures 诊断与 `tests/README.md` 期望完全一致，无新增误报 ✅
+- 干净 shader（`spatial_clean` / `hint_comments` / `color_sample`）→ 零误报 ✅
+
+#### 改动文件
+- `lua/gdshader_nvim/semantic/diagnostics.lua`
+  （新增 `check_parameter_shadowing`；`build()` 调用；依赖既有 `add_at` / `fn.scope`）
+- `tests/fixtures/param_shadow.gdshader`（新增）
+- `tests/README.md`（新增 param_shadow 期望行）
+
+#### 仍存在的差距（对照表更新）
+| 语义：参数遮蔽 warning | ✅ | ✅（本轮补齐） | 已对齐 |
+| 语义：类型不匹配（赋值 / 变量初始化） | ✅ error | ❌ | 大差距（暂未补，依赖完整表达式类型推断）|
+
+### 对齐 vscode 版与 nvim 版报错逻辑 & 弥补差距：类型不匹配（赋值 / 变量初始化）
+
+#### 现象
+声明初始化（`float x = vec3(...)`）或赋值语句（`col = f;`）左右类型不符时，nvim 此前
+完全不报错；vscode 的 `analyzer.analyzeVariableDecl` 与 `analyzer.analyzeExpression`
+（AssignExpr 分支）会通过严格 `isTypeCompatible` 报 `typeMismatch` error。
+该差距在上一节对比表中列为“语义：类型不匹配（赋值 / 变量初始化）❌ 大差距（暂未补）”。
+
+#### 实现
+`lua/gdshader_nvim/semantic/diagnostics.lua` 新增 `check_type_mismatches`：
+- 复用既有 `inference.infer_expression_type(bufnr, expr, cursor_line)` 推导表达式类型
+  （其内部依赖 `semantic_types` 的构造器 / 成员 / 下标 / 运算结果推导）。
+- 严格兼容 `is_type_compatible(expected, actual)`：仅“完全相同”或含 `void` 时兼容
+  （与 vscode `analyzer.isTypeCompatible` 一致；标量↔向量等宽松兼容留给运算上下文）。
+- **声明初始化**：遍历 `globals` 与每个函数 `fn.scope` 的局部符号（含 `has_initializer`），
+  在其 token 区间内定位 depth-0 的 `=` 初始化运算符，抽取右值文本推断类型，
+  与声明类型（`sym.type`）比较；不符则 `error type-mismatch`（定位在声明名）。
+- **赋值语句**：词法器未把 if/while 体建成 AST，故用**基于 token** 的扫描覆盖所有
+  depth-0 的 `=`（含 if/while 内的赋值），比只走函数体 AST 更完整；抽取左右表达式
+  文本分别推断类型后比较，不符则 `error type-mismatch`（定位在 `=` 运算符）。
+- 声明初始化的 `=` 索引记入 `decl_eq_indices`，赋值扫描时跳过，避免重复报告。
+- `build()` 中在 `check_parameter_shadowing` 之后调用。
+
+#### 验证（headless nvim --headless）
+- 新增 `tests/fixtures/type_mismatch.gdshader`：
+  `float wrong = vec3(1.0, 2.0, 3.0);`（声明初始化，L6 报 vec3→float）+
+  `col = f;`（赋值语句，L14 报 float→vec3）均正确报 `error type-mismatch` ✅
+- 13 个原有回归 fixtures 诊断与 `tests/README.md` 期望完全一致，无新增误报 ✅
+- 真实合法 shader（uniform/vec/mat/int/uint 初始化、TIME/UV/NORMAL/ALBEDO/COLOR、
+  mix/normalize/sin、成员 swizzle 赋值、运算结果回写）零误报 ✅
+  （注：`COLOR = mix(vec3, vec3, float)` 中 COLOR 在 spatial 为 vec4、
+  mix 返回 vec3，确为真实类型错误，vscode 同样会报，非误报。）
+
+#### 改动文件
+- `lua/gdshader_nvim/semantic/diagnostics.lua`
+  （新增 `is_type_compatible` / `split_at_eq` / `compute_depth` / `check_type_mismatches`；
+  `build()` 调用；顶层 `require` 增加 `inference`）
+- `tests/fixtures/type_mismatch.gdshader`（新增）
+- `tests/README.md`（新增 type_mismatch 期望行）
+
+#### 仍存在的差距（对照表更新）
+| 语义：类型不匹配（赋值 / 变量初始化） | ✅ error | ✅ error（本轮补齐） | 已对齐 |
+| 语义：参数遮蔽 warning | ✅ | ✅ | 已对齐（上一节） |
+| 语义：函数调用参数数量 / 类型（argCount / argTypeMismatch） | ✅ | ✅（本轮补齐） | 已对齐 |
+
+
+## 补齐：函数调用参数数量 / 类型（argCount / argTypeMismatch）
+
+### 现象
+`check_call_args`（语义诊断）此前只报 **参数数量不符（arg-count）**，
+对 **参数类型不符（arg-type）** 完全不报。对照 vscode 的
+`analyzer.checkCallArgs`（loc: `analyzer.argCount` / `analyzer.argTypeMismatch`），
+nvim 在「函数调用参数类型」一项存在差距。
+
+例：`vec3 combine(vec3 a, float b)` 被 `combine(vec3(1.0), vec3(1.0))` 调用时，
+第二个参数应为 `float` 却给 `vec3`，vscode 报 `argTypeMismatch`，nvim 此前静默通过。
+
+### 根因（headless 复现确认）
+`diagnostics.lua` 的局部函数 `extract_args` 在切分实参文本时：
+- 把 `(` / `)` 排除出 `cur`（仅用于深度计数，不写入结果）；
+- 用 `table.concat(seg, " ")` 以空格拼接实参 token。
+
+于是 `vec3(1.0)` 被重建成 `vec3 1.0`（或 `vec31.0`），不再是合法表达式，
+`inference.infer_expression_type` 对其返回 `nil`，导致 arg-type 分支
+（`if arg_type and not is_type_compatible(...)`）永远不触发。
+arg-count 因为只数实参个数、不依赖文本，故一直正常。
+
+### 修复
+- `extract_args`：`(` / `)`（及 `[` / `]`）在更新深度计数后**同时写入 `cur`**，
+  保留构造器括号；实参文本改用 `table.concat(cur)`（无分隔符拼接），
+  去掉 `:gsub("%s+"," ")` 空格规整——GDShader 词法 token 无空格即合法，
+  可被 inference 正确重 lex。
+- 返回值由「字符串列表」改为「带 token 区间的表」`{ text, start_i, end_i }`，
+  供 arg-type **精确定位到实参首 token**（对齐 vscode 把 `argTypeMismatch`
+  标在实参上，而非被调函数名）；空实参 `text == ""`、`start_i == nil`。
+- `check_call_args`：适配结构化返回值；arg-count 仍标在被调名（与现行为/ vscode 一致），
+  arg-type 改标在实参首 token；其余守卫（跳过类型/结构体构造器、成员访问 `a.b(...)`、
+  声明起始关键字）保持不变。
+
+### 验证（headless nvim --headless 跑 diagnostics.get）
+- `tests/fixtures/call_args.gdshader`：恰好 2 条诊断——
+  - `arg-count`：combine expects 2 argument(s), but 1 were provided（缺参例）；
+  - `arg-type`：Argument 'b' type mismatch: expected 'float', got 'vec3'（类型错例）。
+  （参数 `a` 为 vec3、实参 vec3 兼容，不报。）
+- **全量回归**：15 个既有 fixtures 诊断与 `tests/README.md` 期望完全一致，零新增误报。
+  重点确认：`hint_comments.gdshader` 的 `get_data()`（0 参）无误报；
+  `type_mismatch.gdshader` 的 `vec3(wrong)`（类型构造器）被跳过无误报。
+- 嵌套调用 `foo(bar(a,b), c)`、下标 `f(arr[0])`、成员 `v.xyz` 作实参时，
+  文本仍可正确推断。
+
+### 改动文件
+- `lua/gdshader_nvim/semantic/diagnostics.lua`（`extract_args` 保留括号+无空格拼接+返回 token 区间；`check_call_args` 适配并定位实参）
+- `tests/fixtures/call_args.gdshader`（补充期望注释）
+- `tests/README.md`（新增 call_args 期望行）
+
+### 仍存在的差距（已澄清 + 已补强）
+- **内置函数调用参数检查（澄清）**：**经核对 vscode 源码，vscode 并不检查内置函数的参数数量/类型**——
+  其 `injectBuiltinFunctions` 注入内置函数时**不带 `parameters``，且 `checkCallArgs` 在
+  `sym.kind !== Function && sym.kind !== HintDefined` 处对内置函数提前 `return`。
+  因此此前“vscode 对内置函数做 arg-count”的说法**不成立**；nvim 此前同样不查内置函数，二者本就一致。
+- **内置函数调用参数检查（本轮已补强）**：在用户函数已有检查之上，**额外覆盖内置函数**
+  （解析 `builtin_functions.lua` 的 `signature` 取参数个数与类型），使 nvim 比 vscode 更严格。
+  详见下文「补齐：内置函数调用参数检查（arg-count + arg-type）」。
+
+## 补齐：内置函数调用参数检查（arg-count + arg-type）
+
+### 背景与澄清
+上一节把「内置函数调用参数数量/类型」列为“vscode 检查、nvim 暂未补”的差距。经核对 vscode
+源码（`src/parser/analyzer.ts`）确认：**vscode 本身不检查内置函数的参数数量/类型**——
+内置函数注入时无 `parameters`，`checkCallArgs` 对它们提前 `return`。故此前表述有误，
+nvim 与 vscode 在此项本就一致（都不查）。本次按用户要求，**在用户函数已有检查之上额外覆盖
+内置函数**，使 nvim 的诊断比 vscode 更严格（属“补强”而非“对齐”）。
+
+### 数据现状（已查证）
+`lua/gdshader_nvim/data/builtin_functions.lua` 共 97 条，每条含 `signature` 字符串
+（如 `vec4 texture(sampler2D s, vec2 uv)` / `int floatBitsToInt(float x)` / `T mix(T a, T b, T t)`）。
+**无重载、无变长、无数组/嵌套括号**，签名解析简单可靠。类型构造器同名（如 `mat3`）已被既有
+`semantic_types.is_type(fn_name)` 守卫跳过，与 vscode 跳过 `ALL_TYPES` 的行为一致。
+
+### 改动
+- `lua/gdshader_nvim/semantic/diagnostics.lua`：
+  - 新增 `parse_signature_params(signature)`：取首个 `(` 到匹配 `)` 间内容，按 depth-0
+    逗号切分，每段取首个空白前 token 作为类型，返回 `{ types, count }`；挂到既有
+    `rebuild()`/`ensure()` 机制，随 knowledge 版本失效重建（`builtin_param_map`）。
+  - `check_call_args`：开头调用 `ensure()`；把“仅用户函数”的参数解析扩展为
+    “用户函数优先、内置函数兜底”的统一 `params` 表；`arg-count` 与 `arg-type` 沿用既有
+    逻辑（`is_generic_type` 跳过泛型 `T`/`mat`/`vec` 等，`arg-type` 定位到实参首 token）。
+  - 注意：`parse_signature_params` 必须定义在 `rebuild()` **之前**（Lua 局部变量对前方
+    定义的函数不可见，否则 `rebuild` 内引用会解析成 nil 全局变量）。
+- `tests/fixtures/builtin_call_args.gdshader`（新增）：覆盖 `texture` 缺参→arg-count、
+  `texture` 第1参类型错（sampler2D 收 vec3）→arg-type、`sin()` 缺参→arg-count；
+  `dot(vec3,vec3)` 泛型及 `texture(tex, vec2)` 正确调用无诊断。
+- `tests/README.md`（新增 builtin_call_args 期望行）。
+
+### 验证（headless nvim --headless 跑 diagnostics.get）
+- `builtin_call_args.gdshader`：恰好 3 条——
+  - `arg-count`：texture expects 2 argument(s), but 1 were provided（L16）；
+  - `arg-type`：Argument 'arg1' type mismatch: expected 'sampler2D', got 'vec3'（L19）；
+  - `arg-count`：sin expects 1 argument(s), but 0 were provided（L25）。
+  （`dot(vec3,vec3)` 泛型不报；`texture(tex, vec2(0.0))` 正确无报。）
+- **全量回归**：16 个 fixtures（15 + 新增 builtin）诊断与 `tests/README.md` 期望完全一致，零新增误报。
+  重点确认使用 `mix`/`vec3`/`ALBEDO` 等内置/类型的样例不误报（构造器名已跳过；`mix` 等泛型仅做数量检查且参数个数一致）。
+
+### 已知限制
+- 内置参数个数依赖 `builtin_functions.lua` 的 `signature` 数据；若数据未列出某内置的全部重载
+  （如 `texture(sampler, uv, bias)` 的三参形态），按现有数据会报 arg-count。属数据覆盖面问题，
+  非本逻辑缺陷；如需覆盖可在数据层补充重载。
