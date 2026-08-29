@@ -16,6 +16,10 @@ local hl_counter = 0
 ------------------------------------------------------------
 
 local function clamp01(x)
+    -- Defensive: non-numeric values (e.g. a missing component when a vecN
+    -- literal has more than 4 in-range parts) clamp to 0 instead of erroring.
+    x = tonumber(x) or 0
+
     if x < 0 then
         return 0
     end
@@ -471,6 +475,12 @@ end
 -- never parses GDShader text and never writes its own output format.
 ------------------------------------------------------------
 
+-- ccc is designed around a single, reused core (its own :CccPick keeps
+-- one core alive). Reusing this instance across opens avoids the dangling
+-- UI/window state that a fresh Core.new() on every open would leave behind
+-- (which broke h/l on the second open). Lazily created on first use.
+local ccc_core = nil
+
 local function ccc_ready()
     local ok, ccc = pcall(require, "ccc")
 
@@ -505,13 +515,31 @@ local function open_ccc(bufnr, row, column, match)
         return false
     end
 
-    local core_ok, core = pcall(function()
-        return require("ccc.core").new()
-    end)
+    -- Reuse one ccc core across all opens (see note on `ccc_core` above).
+    -- Creating a fresh Core.new() per open left the previous UI/window
+    -- state dangling and broke h/l on the second open.
+    if not ccc_core then
+        local core_ok, core = pcall(function()
+            return require("ccc.core").new()
+        end)
 
-    if not core_ok or not core then
-        return false
+        if not core_ok or not core then
+            return false
+        end
+
+        ccc_core = core
     end
+
+    local core = ccc_core
+
+    -- If a previous picker is still open, close it so the reused UI can be
+    -- reopened cleanly.
+    if core.ui.winid and vim.api.nvim_win_is_valid(core.ui.winid) then
+        pcall(core.ui.close, core.ui)
+    end
+
+    -- Each edit starts in RGB input mode (GDShader's native color space).
+    pcall(function() core.color:reset_mode() end)
 
     local comps = match.components
     local n = #comps
@@ -551,13 +579,16 @@ local function open_ccc(bufnr, row, column, match)
         pcall(function() rgb = core.color:get_rgb() end)
 
         -- ccc returns 0..1 RGB; clamp into GDShader's 0..1 range.
-        local new_comps = {
-            clamp01(rgb[1] or 0),
-            clamp01(rgb[2] or 0),
-            clamp01(rgb[3] or 0),
-        }
+        -- Build exactly `n` components: the first three from ccc's RGB,
+        -- the 4th (for vec4) from ccc's alpha, and any extra source
+        -- components preserved as-is (defensive; valid GLSL is vec3/vec4).
+        local new_comps = {}
 
-        if n == 4 then
+        for i = 1, 3 do
+            new_comps[i] = clamp01(rgb[i] or 0)
+        end
+
+        if n >= 4 then
             local a
 
             pcall(function() a = core.color.alpha:get() end)
@@ -567,6 +598,10 @@ local function open_ccc(bufnr, row, column, match)
             end
 
             new_comps[4] = clamp01(a)
+        end
+
+        for i = 5, n do
+            new_comps[i] = clamp01(comps[i])
         end
 
         local replacement = build_vec_text(n, new_comps)
@@ -802,6 +837,10 @@ function M.edit()
                 new_comps[4] = hex[4] ~= nil and hex[4] or comps[4]
             end
 
+            for i = 5, n do
+                new_comps[i] = clamp01(comps[i])
+            end
+
             local replacement = build_vec_text(n, new_comps)
 
             pcall(vim.api.nvim_buf_set_text, bufnr, row, match.start_col, row, match.end_col, { replacement })
@@ -825,6 +864,10 @@ function M.edit()
 
         if n == 4 then
             new_comps[4] = parsed.A ~= nil and parsed.A or comps[4]
+        end
+
+        for i = 5, n do
+            new_comps[i] = clamp01(comps[i])
         end
 
         local replacement = build_vec_text(n, new_comps)

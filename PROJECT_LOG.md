@@ -301,3 +301,72 @@ decorate 开启后，色块为前景字符着色的透明背景小方块：白�
 
 ### 改动文件
 - `README.md`（命令去重、配置补全、颜色详解章节、API 参考章节）
+
+## 修复：ccc.nvim 第二次打开时 h/l 失效（色块粉条不动）
+
+### 现象
+`:GDShaderEditColor` 使用 ccc.nvim 取色器时，第一次正常；`enter` 确认后再次触发，
+`h`/`l` 无法调节颜色、进度条（粉条）不动；但 `j`/`k`（上下选择）、`i`（切换 rgb↔hsl）正常。
+
+### 根因（经 headless 复现确认）
+原 `open_ccc` 每次都 `require("ccc.core").new()` 新建一个 core。但 ccc 的设计是
+**复用单一 core 单例**（其自带 `:CccPick` 始终复用同一个 core，`ccc/init.lua` 的
+`setup()` 只 `new()` 一次）。每次新建 core 会让上一个 core 的 UI/窗口状态“悬空”，
+导致下一次 `core.ui:open` 后 `core.ui:update()` 提前返回（窗口判定失效），于是
+`h`/`l` 调用的 `_apply_delta` 即使改了 `input.value`，刷新与回读都错位，表现为粉条不动。
+
+headless 复现（`tests/ccc_repro.lua`，已删除）：每次 `Core.new()` 时 open#2 的
+`core.color:get_rgb()` 在 `h` 后仍保持原值（未改变）；改为**复用单一 core** 后，
+open#1/#2/“开着时再触发”/open#4 的 `h` 均正确改变颜色（0.5 → 0.496）。
+
+### 修复
+- `lua/gdshader_nvim/color.lua`：
+  - 新增模块级 `local ccc_core = nil`，首次使用时 `Core.new()` 一次，之后所有打开复用。
+  - 每次打开前，若上一个取色器窗口仍有效则先 `core.ui:close()`，保证复用 UI 能干净重开。
+  - 每次编辑以 RGB 输入模式起步（`core.color:reset_mode()`，对齐 GDShader 原生色彩空间）。
+  - 其余逻辑（`set_rgb` / alpha 显隐 / 覆盖 `<CR>`·`q` / 写回 `vecN`）不变。
+
+### 验证
+headless 复现脚本（复用 core + reset_mode + 开着时再触发）确认 open#1/#2/重开/open#4
+的 `h`/`l` 均正常改变颜色，进度条随调节移动；不修改真实 buffer；vec3/vec4 解析、写回、
+防抖逻辑不受影响。
+
+### 改动文件
+- `lua/gdshader_nvim/color.lua`（`open_ccc`：复用单一 ccc core + 打开前关闭旧 UI + reset_mode）
+
+### 验证
+（同上 headless 复现结论）
+
+## 修复：编辑颜色时 `attempt to compare nil with number`（clamp01）
+
+### 现象
+`:GDShaderEditColor` 确认写回时崩溃，LSP 退出：
+```
+E5108: .../color.lua:19: attempt to compare nil with number
+  clamp01 → fmt_component → build_vec_text → open_ccc 的 commit
+```
+
+### 根因
+`build_vec_text(n, comps)` 用 `for i = 1, n` 调用 `fmt_component(comps[i])`，
+而 `comps` 的构造只在 `n == 4` 时补第 4 个分量。若源字面量是带
+≥5 个 `[0,1]` 分量的 `vecN`（被解析为 n ≥ 5），则 `new_comps[5..]` 为 `nil`，
+`clamp01(nil)` 在 `x < 0` 处比较 `nil` 与数字而报错。headless 复现确认 n=5 必崩、
+n=3/4 正常。另：`vim.tbl_islist` 在 Neovim 0.12 已弃用，产生 deprecation 告警。
+
+### 修复
+- `lua/gdshader_nvim/color.lua`：
+  - `clamp01(x)` 开头加 `x = tonumber(x) or 0`（nil/非数字 → 0），作为全局防崩底线，
+    覆盖 ccc commit 与内置编辑器三个 `build_vec_text` 调用点。
+  - ccc 的 `commit`：改为按 `n` 完整构造 `new_comps`——前三来自 ccc RGB、
+    第 4（vec4）来自 ccc alpha、第 5..n 原样保留源分量（`for i = 5, n do new_comps[i] = clamp01(comps[i]) end`）。
+  - 内置编辑器的 HEX / R-G-B 两条写回路径同样补 `for i = 5, n` 保留多余分量。
+- `lua/gdshader_nvim/config.lua`：`is_list` 改用 `vim.islist or vim.tbl_islist`，
+  消除 `vim.tbl_islist` 弃用告警（`knowledge.lua` 早已如此处理）。
+
+### 验证
+headless 复现（n=3/4/5）确认三种情况均生成正确 `vecN(...)` 且不再报错；
+两文件 `loadfile` 语法检查通过；临时复现脚本已删除。
+
+### 改动文件
+- `lua/gdshader_nvim/color.lua`（`clamp01` 防 nil；ccc / 内置两条写回路径按 `n` 完整构造分量）
+- `lua/gdshader_nvim/config.lua`（`is_list` 用 `vim.islist` 优先，回退 `vim.tbl_islist`）

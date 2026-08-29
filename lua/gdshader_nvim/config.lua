@@ -181,7 +181,14 @@ local configured = false
 ------------------------------------------------------------
 
 local function is_list(value)
-    return type(value) == "table" and vim.tbl_islist(value)
+    if type(value) ~= "table" then
+        return false
+    end
+
+    -- vim.islist replaces the deprecated vim.tbl_islist (Neovim >= 0.10).
+    local islist = vim.islist or vim.tbl_islist
+
+    return islist(value)
 end
 
 local function deep_merge(dst, src)
