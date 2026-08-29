@@ -200,3 +200,104 @@ require("gdshader_nvim").setup({
 ### 验证
 decorate 开启后，每个 [0,1] 区间内的 `vec3/vec4` 字面量前出现对应颜色的方块；
 修改 `swatch` 配置后刷新即显示新符号。
+
+## 增强：色块前后间距可分别配置
+
+### 需求
+用户希望方块与前后内容之间的**间距可独立控制**，而非固定紧贴字面量。例如：
+- `vec3 color =⬛️vec3(1,1,1);`（`pad_left=0, pad_right=0`）
+- `vec3 color =         ⬛️        vec3(1,1,1);`（`pad_left=9, pad_right=8`）
+
+### 改动
+- `lua/gdshader_nvim/config.lua`：`color` 表新增 `swatch_pad_left` / `swatch_pad_right`（整数，空格数，默认 0；负值回退为 0）。
+- `lua/gdshader_nvim/color.lua`（`M.refresh`）：读取两个 padding；
+  以 `string.rep(" ", n)` 在 `swatch` 符号**前后**各插入对应空格（用空高亮组 `""`，即透明间隙，不参与着色），
+  再一起作为 `virt_text` 列表传入 inline extmark。padding 为 0 时不插入对应 chunk。
+
+### 使用
+```lua
+require("gdshader_nvim").setup({
+  color = {
+    decorate = true,
+    swatch = "⬛️",
+    swatch_pad_left = 9,    -- 方块前空格数
+    swatch_pad_right = 8,   -- 方块后空格数
+  },
+})
+```
+运行时改间距：`require("gdshader_nvim.config").get().color.swatch_pad_left = 4` 后
+`:GDShaderColorDecoration`（关→开）或编辑缓冲区触发刷新即生效。
+
+### 改动文件
+- `lua/gdshader_nvim/config.lua`（新增 `color.swatch_pad_left` / `swatch_pad_right`）
+- `lua/gdshader_nvim/color.lua`（`M.refresh` 组装含前后空格的 `virt_text`）
+
+### 验证
+decorate 开启后，方块按配置的左右空格数显示间距；该间距为透明空白，不影响方块自身的颜色填充。
+
+## 修复：色块为单一纯色（消除“目标色背景 + 反色内方块”双层效果）
+
+### 现象
+`vec3(1,1,1)` 白色显示为“白色矩形里嵌黑色小方块”；紫色 `vec3(0.4667,0.1529,0.749)`
+显示为“紫色矩形里嵌白色小方块”。并非期望的单一纯色色块。
+
+### 根因
+`swatch_hl()` 同时设置：
+- `bg = 实际颜色`（字符格背景被染成目标色）
+- `fg = 按亮度算出的黑/白对比色`（前景字符 `■` 被染成对比色）
+
+`■` 是真实前景字符，于是字符本身呈对比色、所在字符格背景呈目标色，形成双层反色方块。
+
+### 修复
+将 `swatch_hl()` 改为 `fg = bg = 目标颜色 hex`：
+- 字符格背景 = 目标色，前景 `■` 也是同色 → 单一纯色色块，无内层反色方块。
+- 不再按亮度取对比色（装饰性色块无需可读文字）。
+- padding 空格使用空高亮组 `""`，保持透明间隙，不受影响。
+- 预览相关高亮（`GDShaderColorSwatchPreview` / `...PreviewEdit`）本就 `fg=bg=hex`，
+  与此保持一致。
+
+### 改动文件
+- `lua/gdshader_nvim/color.lua`（`swatch_hl`：`fg` 与 `bg` 均设为 `hex`，移除亮度对比逻辑）
+
+### 验证
+白色 `vec3(1,1,1)` 显示纯白色块；紫色显示纯紫色块；无内部黑/白小方块；
+不修改真实 buffer；仍用 extmark / virtual text；vec3/vec4 解析、刷新、防抖逻辑不变。
+
+## 调整：色块用前景(fg)着色、背景透明
+
+### 需求（接续上一条）
+上一条把 `fg` 与 `bg` 都设为目标色，得到单一纯色块。但用户进一步要求：
+**背景透明，色块仅由前景字符（fg）构成**，即 `bg` 不应铺色，方块应是 `fg` 的 `■` 字形本身。
+
+### 改动
+- `lua/gdshader_nvim/color.lua`（`swatch_hl`）：`bg` 改为 `"NONE"`（透明/继承），
+  `fg` 保持目标颜色 hex。色块完全由前景字符 `swatch` 的字形与 fg 颜色形成。
+
+### 注意：符号须为文本字形
+前景着色只对**文本字形**生效（如 `■` / `●` / `#`）。彩色 emoji（如 `⬛️`）在多数终端
+会忽略 `fg`、自行渲染颜色，可能出现“不受控的 emoji 方块”。因此 `color.swatch` 建议
+保持默认 `"■"`（U+25A0 BLACK SQUARE）这类纯文本方块，以保证 fg 着色可控。
+
+### 改动文件
+- `lua/gdshader_nvim/color.lua`（`swatch_hl`：`bg = "NONE"`，仅 `fg = hex`）
+
+### 验证
+decorate 开启后，色块为前景字符着色的透明背景小方块：白色显示为前景白色方块、
+紫色显示为前景紫色方块；背景不再铺色；不修改真实 buffer；解析/刷新/防抖逻辑不变。
+
+## 文档：更新 README.md（颜色 API + 各 API 详细用法）
+
+### 内容
+- 修复命令列表中重复的 `:GDShaderEditColor` 条目。
+- 配置示例补全：`keymaps.edit` 与完整 `color` 表
+  （`editor` / `decorate` / `debounce_ms` / `swatch` / `swatch_pad_left` / `swatch_pad_right`）。
+- 新增「颜色功能详解 · Color」章节：行内色块、色块符号与间距（含 fg 着色/透明背景说明、
+  文本字形建议、运行时修改示例）、颜色预览、颜色编辑（后端/HEX/vec3-vec4 保留）。
+- 新增「API 参考 · API Reference」章节：
+  - `setup(opts)` / `extend(extra)` 的键表与示例；
+  - 全部命令（`GDShaderHover` / `Definition` / `References` / `Rename` / `Format` /
+    `InsertTemplate` / `PreviewColor` / `ColorDecoration` / `EditColor`）的参数与说明对照表。
+- 说明颜色命令仅在 `[0,1]` 区间的 `vec3/vec4` 上有效。
+
+### 改动文件
+- `README.md`（命令去重、配置补全、颜色详解章节、API 参考章节）

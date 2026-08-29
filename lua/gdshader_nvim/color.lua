@@ -131,16 +131,14 @@ local function swatch_hl(r, g, b)
     local hex = "#" .. hex2(r) .. hex2(g) .. hex2(b)
 
     --------------------------------------------------------
-    -- 文字颜色取对比色，保证色块可读。
+    -- 色块由前景字符（如 ■）的 fg 构成，背景透明（NONE）：
+    -- 只给字符本身上色，不为字符格铺背景色，避免“背景色 +
+    -- 前景字符”的双层效果。bg 设为 "NONE" 表示继承/透明。
     --------------------------------------------------------
 
-    local luminance = 0.299 * r + 0.587 * g + 0.114 * b
-
-    local fg = luminance > 0.5 and "#000000" or "#ffffff"
-
     pcall(vim.api.nvim_set_hl, 0, name, {
-        fg = fg,
-        bg = hex,
+        fg = hex,
+        bg = "NONE",
     })
 
     return name, hex
@@ -276,6 +274,18 @@ function M.refresh(bufnr)
         swatch = "■"
     end
 
+    local pad_left = tonumber(config.color.swatch_pad_left) or 0
+
+    if pad_left < 0 then
+        pad_left = 0
+    end
+
+    local pad_right = tonumber(config.color.swatch_pad_right) or 0
+
+    if pad_right < 0 then
+        pad_right = 0
+    end
+
     vim.api.nvim_buf_clear_namespace(bufnr, namespace, 0, -1)
 
     local line_count = vim.api.nvim_buf_line_count(bufnr)
@@ -297,8 +307,20 @@ function M.refresh(bufnr)
 
                 local hl_name, _ = swatch_hl(r, g, b)
 
+                local virt_text = {}
+
+                if pad_left > 0 then
+                    table.insert(virt_text, { string.rep(" ", pad_left), "" })
+                end
+
+                table.insert(virt_text, { swatch, hl_name })
+
+                if pad_right > 0 then
+                    table.insert(virt_text, { string.rep(" ", pad_right), "" })
+                end
+
                 pcall(vim.api.nvim_buf_set_extmark, bufnr, namespace, row, match.start_col, {
-                    virt_text = { { swatch, hl_name } },
+                    virt_text = virt_text,
                     virt_text_pos = "inline",
                 })
             end

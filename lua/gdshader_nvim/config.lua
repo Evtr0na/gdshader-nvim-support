@@ -100,6 +100,12 @@ local defaults = {
         -- decoration is on. Change it (e.g. "■", "⬛", "#", "●") and
         -- re-toggle / re-edit to apply. Empty string falls back to "■".
         swatch = "■",
+
+        -- Whitespace padding (number of spaces) inserted before / after the
+        -- swatch symbol, independent of each other. 0 means tight against the
+        -- literal. e.g. pad_left=9, pad_right=8 -> "=         ■        vec3(...)".
+        swatch_pad_left = 0,
+        swatch_pad_right = 0,
     },
 
     --------------------------------------------------------
